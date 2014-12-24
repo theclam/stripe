@@ -22,12 +22,14 @@
 #define IP_MD5 '\x10'
 #define UNKNOWN '\x11'
 #define GRE '\x12'
+#define GTP '\x13'
 
 #define CHECKSUM_PRESENT '\x80'
 #define ROUTING_PRESENT '\x40'
 #define KEY_PRESENT '\x20'
 #define SEQUENCE_PRESENT '\x10'
 
+#define PADDING "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 
 typedef struct frame_s {
 // A data type to store the bits we need to construct a simple frame from a more complex one.

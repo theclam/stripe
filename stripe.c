@@ -6,11 +6,11 @@
 
 #include "stripe.h"
 
-#define SWVERSION "v0.1 alpha"
-#define SWRELEASEDATE "November 2014"
+#define SWVERSION "v0.2 alpha"
+#define SWRELEASEDATE "December 2014"
 
 // STRIPE (STRIP Encapsulation) attempts to peel away layers of VLAN and MPLS tags,
-// PPPoE headers, L2TP and so on leaving plain untagged payload over Ethernet. The resulting
+// PPPoE headers, L2TP and GTP leaving plain untagged payload over Ethernet. The resulting
 // plain frames are then saved in a pcap file which can then be fed to applications that
 // are not able to deal with the additional headers. 
 // Written by Foeh Mannay
@@ -230,6 +230,8 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			
 			if(memcmp(data + 2, "\x06\xa5", 2) == 0){		// L2TP
 				return(decap(data + 8, length - 8, L2TP, frame));
+			} else if(memcmp(data + 2, "\x08\x68", 2) == 0){// GTP
+				return(decap(data + 8, length - 8, GTP, frame));
 			} else return(frame);
 		break;
 		case L2TP:
@@ -270,6 +272,38 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 				break;	
 			}
 			return(decap(data + vlen, length - vlen, L2AVP, frame));
+		break;
+		case GTP:
+			// If we get a GTP data packet, deal with the payload.
+			if(length < 28) return(frame);
+			
+			// If frame is not a GTP U frame then don't bother decap-ing it
+			if(((data[0] & '\xe0') != '\x20') || (data[1] != '\xff')) return(frame);
+			
+			vlen = (256*(unsigned char)data[2])+(unsigned char)data[3];
+
+			if((data[0] & '\x07') != 0) {						// Long header
+				if(vlen > (length - 8)) return(NULL);			// If the header says length > remaining data, bail out
+				
+				pos = 12;
+				if(((unsigned char)data[0] & '\x04') != 0) {
+					while((unsigned char)data[pos-1] != 0){		// Shave off any extension headers
+						if(((unsigned char)data[pos]) == '\x00') return(NULL);	// avoid getting stuck for zero length extension headers
+						pos += (((unsigned char)data[pos]) * 4);
+						if(pos > vlen) return(NULL);			// Check we're not over-reading
+					}
+				}
+			} else {											// Short header
+				if(vlen > (length - 8)) return(NULL);			// If the header says length > remaining data, bail out
+				pos = 8;
+			}
+			
+			// Parsed OK, update frame template and parse IPv4
+			frame->plen = length - pos;
+			frame->payload = data + pos;
+			memcpy(frame->etype, "\x08\x00", 2);
+			return(decap(data + pos, vlen - pos, IPv4, frame));
+			
 		break;
 		case UNKNOWN:
 			// Non-encapsulating payload, just return
@@ -363,24 +397,36 @@ int parse_pcap(FILE *capfile, FILE *outfile){
 		
 		if(decapped != NULL){
 			decapcount++;
-			rechdr->incl_len = decapped->plen+14;
-			rechdr->orig_len = decapped->plen+14;
+
+			if(decapped->plen < 46) { // pad undersized frames!
+				rechdr->incl_len = 60;
+				rechdr->orig_len = 60;
+			} else {
+				rechdr->incl_len = decapped->plen+14;
+				rechdr->orig_len = decapped->plen+14;
+			}
 						
 			if(fwrite(rechdr, 1, sizeof(pcaprec_hdr_t), outfile) != sizeof(pcaprec_hdr_t)){
 				printf("Error: unable to write pcap record header to output file!\n");
 				return(0);
 			}
-			if(fwrite(frame->ether, 1, 12, outfile) != 12){
+			if(fwrite(decapped->ether, 1, 12, outfile) != 12){
 				printf("Error: unable to write frame to output pcap file\n");
 				return(0);
 			}
-			if(fwrite(frame->etype, 1, 2, outfile) != 2){
+			if(fwrite(decapped->etype, 1, 2, outfile) != 2){
 				printf("Error: unable to write frame to output pcap file\n");
 				return(0);
 			}
-			if(fwrite(frame->payload, 1, frame->plen, outfile) != frame->plen){
+			if(fwrite(decapped->payload, 1, decapped->plen, outfile) != decapped->plen){
 				printf("Error: unable to write frame to output pcap file\n");
 				return(0);
+			}
+			if(decapped->plen < 46) { // pad undersized frames!
+				if(fwrite(PADDING, 1, (46 - frame->plen), outfile) != (46 - decapped->plen)){
+					printf("Error: unable to write frame padding to output pcap file\n");
+					return(0);
+				}
 			}
 		}
 	}
