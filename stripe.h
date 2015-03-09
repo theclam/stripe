@@ -29,6 +29,10 @@
 #define KEY_PRESENT '\x20'
 #define SEQUENCE_PRESENT '\x10'
 
+#define MOREFRAGS '\x20'
+
+#define NODEFRAG '\x01'
+
 #define PADDING "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 
 typedef struct frame_s {
@@ -37,6 +41,7 @@ typedef struct frame_s {
 	char		*payload;
 	unsigned int	plen;
 	char 		etype[2];
+	int			fragment;
 } frame_t;
 
 typedef unsigned int guint32;
@@ -62,6 +67,29 @@ typedef struct pcaprec_hdr_s {
 typedef struct params_s {
 	char *infile;
 	char *outfile;
+	char modifiers;
 } params_t;
 
+typedef struct fragment_detail_s {
+	guint16 					start;
+	guint16 					end;
+	char						more;
+	char						*data;
+} fragment_detail_t;
+
+typedef struct frag_hole_s {
+	guint16		start;
+	guint16		end;
+	struct frag_hole_s	*prev;
+	struct frag_hole_s	*next;
+} frag_hole_t;
+
+typedef struct fragment_list_s {
+	char 					*ipinfo;
+	char					*header;
+	char					*data;
+	struct fragment_list_s	*next;
+	guint16					size;
+	frag_hole_t 			*holes;
+} fragment_list_t;
 

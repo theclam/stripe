@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "stripe.h"
+#include "stripe-defrag.h"
 
 #define SWVERSION "v0.2 alpha"
 #define SWRELEASEDATE "December 2014"
@@ -23,25 +24,31 @@ params_t *parseParams(int argc, char *argv[]){
 	params_t *parameters = (params_t*)malloc(sizeof(params_t));
 	if(parameters == NULL) return(NULL);
 
-	// There must be 4 parameters
-	if(argc != 5) return(NULL);
+	// There must be 4 or 5 parameters
+	if((argc < 5) || (argc > 6)) return(NULL);
 
 	// Set some defaults
 	parameters->infile = NULL;
 	parameters->outfile = NULL;
+	parameters->modifiers = 0;
 
 	// Look for the various flags, then store the corresponding value
 	while(i < argc){
-		if(strcmp(argv[i],"-r") == 0){
+		if((strcmp(argv[i],"-r") == 0) && (i < argc - 1)){
 			parameters->infile = argv[++i];
 			i++;
 			continue;
 		}
-		if(strcmp(argv[i],"-w") == 0){
+		if((strcmp(argv[i],"-w") == 0) && (i < argc - 1)){
 			parameters->outfile = argv[++i];
 			i++;
 			continue;
 		}
+		if(strcmp(argv[i],"-f") == 0){
+			parameters->modifiers = parameters->modifiers | NODEFRAG;
+			i++;
+			continue;
+		}		
 		// If we get any unrecognised parameters just fail
 		return(NULL);
 	}
@@ -52,7 +59,7 @@ params_t *parseParams(int argc, char *argv[]){
 	return(parameters);
 }
 
-frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
+frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int modifiers){
 // The decap() function takes in a  pointer to a (partial) frame, the size of the 
 // data, a hint indicating the encap type and a frame template and attempts to
 // fill the frame template with the required details.
@@ -63,7 +70,6 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 	if(data == NULL) return(NULL);
 
 	// Based on current encap type, try to determine what the next encap type will be
-	//printf("Parsing type %u, length %u.\n", type, length);
 	switch(type){
 		case ETHERNET:
 			if(length < 14) return(NULL);
@@ -76,22 +82,22 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			
 			// VLAN tag next?
 			if(memcmp(data+12, "\x81\x00", 2) == 0 || memcmp(data+12, "\x91\x00", 2) == 0){
-				return(decap(data + 14, length - 14, VLAN, frame));
+				return(decap(data + 14, length - 14, VLAN, frame, modifiers));
 			}
 			// MPLS tag next?
 			if(memcmp(data+12, "\x88\x47", 2) == 0){
-				return(decap(data + 14, length - 14, MPLS, frame));
+				return(decap(data + 14, length - 14, MPLS, frame, modifiers));
 			}
 			// PPPoE session data next?
 			if(memcmp(data+12, "\x88\x64", 2) == 0){
-				return(decap(data + 14, length - 14, PPPoE, frame));
+				return(decap(data + 14, length - 14, PPPoE, frame, modifiers));
 			}
 			// IP next?
 			if(memcmp(data+12, "\x08\x00",2) == 0){
-				return(decap(data + 14, length - 14, IPv4, frame));
+				return(decap(data + 14, length - 14, IPv4, frame, modifiers));
 			}
 			// Something else next?
-            		return(decap(data + 14, length - 14, UNKNOWN, frame));
+            		return(decap(data + 14, length - 14, UNKNOWN, frame, modifiers));
 			break;
 		case VLAN:
 			if(length < 4) return(NULL);
@@ -102,22 +108,22 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			// Just skim over VLANs and determine the next encap type from the EtherType
 			// VLAN tag next?
 			if((memcmp(data+2, "\x81\x00", 2) == 0) || (memcmp(data+2, "\x91\x00",2) == 0)){
-				return(decap(data + 4, length - 4, VLAN, frame));
+				return(decap(data + 4, length - 4, VLAN, frame, modifiers));
 			}
 			// MPLS tag next?
 			if(memcmp(data+2, "\x88\x47", 2) == 0){
-				return(decap(data + 4, length - 4, MPLS, frame));
+				return(decap(data + 4, length - 4, MPLS, frame, modifiers));
 			}
 			// PPPoE session data next?
 			if(memcmp(data+2, "\x88\x64", 2) == 0){
-				return(decap(data + 4, length - 4, PPPoE, frame));
+				return(decap(data + 4, length - 4, PPPoE, frame, modifiers));
 			}
 			// IP next?
 			if(memcmp(data+2, "\x08\x00", 2) == 0){
-				return(decap(data + 4, length - 4, IPv4, frame));
+				return(decap(data + 4, length - 4, IPv4, frame, modifiers));
 			}
 			// Something else next?
-			return(decap(data + 4, length - 4, UNKNOWN, frame));
+			return(decap(data + 4, length - 4, UNKNOWN, frame, modifiers));
 			break;
 		case MPLS:
 			if(length < 4) return(NULL);
@@ -126,21 +132,21 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			
 			// Check bottom of stack bit to decide whether to keep stripping MPLS or try for Ethernet
 			if((data[2] & '\x01') == 0){
-				return(decap(data + 4, length - 4, MPLS, frame));	// Not BOS, more MPLS
+				return(decap(data + 4, length - 4, MPLS, frame, modifiers));	// Not BOS, more MPLS
 			}
 
 			if((data[4] & '\xf0') == '\x40'){						// IPv4 (guess)
 				memcpy(frame->etype, "\x08\x00", 2);
-				return(decap(data + 4, length - 4, IPv4, frame));
+				return(decap(data + 4, length - 4, IPv4, frame, modifiers));
 			} else if((data[4] & '\xf0') == '\x60'){				// IPv6 (guess)
 				memcpy(frame->etype, "\x86\xdd", 2);
-				return(decap(data + 4, length - 4, UNKNOWN, frame));
+				return(decap(data + 4, length - 4, UNKNOWN, frame, modifiers));
 			} else {
 				if(memcmp(data + 4, "\x00\x00\x00\x00", 4) == 0){
 					// guessing ethernet control word present... 
-					return(decap(data + 8, length - 8, ETHERNET, frame));	
+					return(decap(data + 8, length - 8, ETHERNET, frame, modifiers));	
 				} else {
-					return(decap(data + 4, length - 4, ETHERNET, frame));	// Ethernet (guess)
+					return(decap(data + 4, length - 4, ETHERNET, frame, modifiers));	// Ethernet (guess)
 				}
 			}
 		break;
@@ -149,7 +155,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			if(length < 6) return(NULL);
 			frame->payload = data;
 			frame->plen = length;
-			return(decap(data + 6, length - 6, PPP, frame));
+			return(decap(data + 6, length - 6, PPP, frame, modifiers));
 		break;
 		case PPP:
 			// Should be IPv4 or IPv6 behind this, otherwise bail.
@@ -159,12 +165,12 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 				memcpy(frame->etype, "\x08\x00", 2);
 				frame->plen = length - 2;
 				frame->payload = data + 2;
-				return(decap(data + 2, length - 2, IPv4, frame));
+				return(decap(data + 2, length - 2, IPv4, frame, modifiers));
 			} else if(memcmp(data, "\x00\x57", 2) == 0){		// IPv6
 				memcpy(frame->etype, "\x86\xdd", 2);
 				frame->plen = length - 2;
 				frame->payload = data + 2;
-				return(decap(data + 2, length - 2, UNKNOWN, frame));
+				return(decap(data + 2, length - 2, UNKNOWN, frame, modifiers));
 			}
 			else return(frame);
 		break;
@@ -176,10 +182,17 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
             frame->payload = data;
             frame->plen = length;
 			
+			// If the frame is a fragment and we're re-assembling, don't decapsulate any further at this point
+			if((((data[6] & '\x3f') | data[7]) != 0) && ((modifiers & NODEFRAG) == 0)) {
+				frame->fragment = 1;
+				return(frame);
+			}
+			
+			// If not a fragment or we're skipping re-assembly, try for more encap
 			if(data[9] == '\x11'){			// UDP
-				return(decap(data + (4 * (data[0] & 15)), length - (4 * (unsigned char)(data[0] & 15)), UDP, frame));
+				return(decap(data + (4 * (data[0] & 15)), length - (4 * (unsigned char)(data[0] & 15)), UDP, frame, modifiers));
 			} else if(data[9] == '\x2f'){	// GRE
-				return(decap(data + (4 * (data[0] & 15)), length - (4 * (unsigned char)(data[0] & 15)), GRE, frame));
+				return(decap(data + (4 * (data[0] & 15)), length - (4 * (unsigned char)(data[0] & 15)), GRE, frame, modifiers));
             } else {
             	return(frame);
             }
@@ -206,19 +219,19 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			
 				// VLAN tag next?
 				if(memcmp(data+2, "\x81\x00", 2) == 0 || memcmp(data+2, "\x91\x00", 2) == 0){
-					return(decap(frame->payload, frame->plen, VLAN, frame));
+					return(decap(frame->payload, frame->plen, VLAN, frame, modifiers));
 				}
 				// MPLS tag next?
 				if(memcmp(data+2, "\x88\x47", 2) == 0){
-					return(decap(frame->payload, frame->plen, MPLS, frame));
+					return(decap(frame->payload, frame->plen, MPLS, frame, modifiers));
 				}
 				// PPPoE session data next?
 				if(memcmp(data+2, "\x88\x64", 2) == 0){
-					return(decap(frame->payload, frame->plen, PPPoE, frame));
+					return(decap(frame->payload, frame->plen, PPPoE, frame, modifiers));
 				}
 				// IP next?
 				if(memcmp(data+2, "\x08\x00",2) == 0){
-				return(decap(frame->payload, frame->plen, IPv4, frame));
+				return(decap(frame->payload, frame->plen, IPv4, frame, modifiers));
 				}
 				// Something else next?
     	        return(frame);
@@ -229,9 +242,9 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			if(length < 8) return(NULL);
 			
 			if(memcmp(data + 2, "\x06\xa5", 2) == 0){		// L2TP
-				return(decap(data + 8, length - 8, L2TP, frame));
+				return(decap(data + 8, length - 8, L2TP, frame, modifiers));
 			} else if(memcmp(data + 2, "\x08\x68", 2) == 0){// GTP
-				return(decap(data + 8, length - 8, GTP, frame));
+				return(decap(data + 8, length - 8, GTP, frame, modifiers));
 			} else return(frame);
 		break;
 		case L2TP:
@@ -241,7 +254,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			vlen = (256*(unsigned char)data[2])+(unsigned char)data[3];
 			if(vlen > length) return(NULL);	// If the header says length > remaining data, bail out
 			
-			return(decap(data + 12, vlen - 12, L2AVP, frame));
+			return(decap(data + 12, vlen - 12, L2AVP, frame, modifiers));
 		break;
 		case L2AVP:
 			// Work through the L2TP AVPs to try and gather auths.
@@ -253,7 +266,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			if(vlen > length) return(NULL);
 			
 			// If this isn't a reserved AVP, we're not interested.
-			if(memcmp(data + 2, "\x00\x00\x00", 3) != 0) return(decap(data + vlen, length - vlen, L2AVP, frame));
+			if(memcmp(data + 2, "\x00\x00\x00", 3) != 0) return(decap(data + vlen, length - vlen, L2AVP, frame, modifiers));
 			
 			switch(data[5]){
 				case '\x00':		// Control message type
@@ -271,7 +284,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 				case '\x21':		// CHAP response data
 				break;	
 			}
-			return(decap(data + vlen, length - vlen, L2AVP, frame));
+			return(decap(data + vlen, length - vlen, L2AVP, frame, modifiers));
 		break;
 		case GTP:
 			// If we get a GTP data packet, deal with the payload.
@@ -302,7 +315,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 			frame->plen = length - pos;
 			frame->payload = data + pos;
 			memcpy(frame->etype, "\x08\x00", 2);
-			return(decap(data + pos, vlen - pos, IPv4, frame));
+			return(decap(data + pos, vlen - pos, IPv4, frame, modifiers));
 			
 		break;
 		case UNKNOWN:
@@ -315,15 +328,20 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame){
 	return(NULL);
 }
 
-int parse_pcap(FILE *capfile, FILE *outfile){
+int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int modifiers){
 	char 				*memblock = NULL;
 	frame_t				*frame = NULL,
 						*decapped = NULL;
 	guint32				caplen = 0;
-	int					decapcount = 0;
+	int					decapcount = 0,
+						fragmented = 0;
 	pcaprec_hdr_t		*rechdr = NULL;
 	
-	printf("\nParsing capfile...\n");
+	if(fragtree == NULL){
+		printf("\nDecapsulating...\n");
+	} else {
+		printf("\nReassembling...\n");	
+	}
 	
 	// Start parsing the capture file:
 	rewind(capfile);
@@ -347,7 +365,7 @@ int parse_pcap(FILE *capfile, FILE *outfile){
 	}
 	// Create the frame template used in the decap process
 	frame = malloc(sizeof(frame_t));
-	if(frame == 0){
+	if(frame == NULL){
 		printf("Error: unable to allocate memory for frame template!\n");
 		return(0);
 	}
@@ -392,9 +410,17 @@ int parse_pcap(FILE *capfile, FILE *outfile){
 		memcpy(frame->etype, "\x00\x00", 2);
 		frame->payload = NULL;
 		frame->plen = 0;
-		decapped = decap(memblock, caplen, ETHERNET, frame);
-		// Write the decapsulated frame to the output file
+		frame->fragment = 0;
 		
+		// If we are handed a NULL pointer, decapsulate. Otherwise, defragment.
+		if(fragtree == NULL){
+			decapped = decap(memblock, caplen, ETHERNET, frame, modifiers);
+			fragmented = (fragmented | decapped->fragment);
+		} else {
+			decapped = reassemble(memblock, caplen, ETHERNET, frame, fragtree);
+		}
+		
+		// Write the decapsulated frame to the output file
 		if(decapped != NULL){
 			decapcount++;
 
@@ -430,16 +456,25 @@ int parse_pcap(FILE *capfile, FILE *outfile){
 			}
 		}
 	}
-	if(rechdr != NULL) free(rechdr);
-
-	return(decapcount);
+	if(rechdr != NULL){
+		free(rechdr);
+	}
+	
+	if(fragmented == 1){
+		return(-1);
+	} else {
+		return(decapcount);
+	}
 }
 
 int main(int argc, char *argv[]){
 // The main function basically just calls other functions to do the work.
 	params_t			*parameters = NULL;
 	FILE				*infile = NULL,
-						*outfile = NULL;
+						*outfile = NULL,
+						*tempfile = NULL;
+	int					packets = 0;
+	fragment_list_t		*fraglist = NULL;
 	
 	// Parse our command line parameters and verify they are usable. If not, show help.
 	parameters = parseParams(argc, argv);
@@ -448,16 +483,22 @@ int main(int argc, char *argv[]){
 		printf("etc. from the frames in a PCAP file and return untagged IP over Ethernet.\n");
 		printf("Version %s, %s\n\n", SWVERSION, SWRELEASEDATE);
 		printf("Usage:\n");
-		printf("%s -r inputcapfile -w outputcapfile\n\n",argv[0]);
+		printf("%s -r inputcapfile -w outputcapfile [-f] \n\n",argv[0]);
 		printf("Where inputcapfile is a tcpdump-style .cap file containing encapsulated IP \n");
 		printf("outputcapfile is the file where the decapsulated IP will be saved\n");
+		printf("-f instructs stripe not to attempt to merge fragmented IP packets\n");
 		return(1);
 	}
 	
-	// Attempt to open the capture file and word list:
+	// Attempt to open the capture file, defragment and decap:
 	infile = fopen(parameters->infile,"rb");
 	if (infile == NULL) {
 		printf("\nError!\nUnable to open input capture file!\n");
+		return(1);
+	}
+	tempfile = tmpfile();
+	if(tempfile == NULL){
+		printf("Error - could not create temporary file!\n");
 		return(1);
 	}
 	outfile = fopen(parameters->outfile, "wb");
@@ -466,10 +507,60 @@ int main(int argc, char *argv[]){
 		return(1);
 	}
 	
-	printf("\n%d frames processed.\n", parse_pcap(infile, outfile));
-
+	if((parameters->modifiers & NODEFRAG) == 0){
+		packets = parse_pcap(infile, tempfile, &fraglist, parameters->modifiers);	
+		rewind(tempfile);
+		packets = parse_pcap(tempfile, outfile, NULL, parameters->modifiers);
+	} else {
+		printf("Reassembly disabled...\n");
+		packets = parse_pcap(infile, outfile, NULL, parameters->modifiers);
+	}
+	
 	fclose(infile);
+	fclose(tempfile);
 	fclose(outfile);
+
+	
+
+	// If we need to re-assemble, do so and re-parse
+	while((packets == -1) && ((parameters->modifiers & NODEFRAG) == 0)){
+	    printf("got fragments, need to reassemble...\n");
+		// Create temporary file for use when re-assembling fragments
+		tempfile = tmpfile();
+		if(tempfile == NULL){
+			printf("Error - could not create temporary file!\n");
+			return(1);
+		}
+		// Re-open outfile for reading
+		outfile = fopen(parameters->outfile, "rb");
+		if(outfile == NULL){
+			printf("Error - could not open output file!\n");
+			return(1);
+		}
+
+		// Re-assemble into the temporary file
+		parse_pcap(outfile, tempfile, &fraglist, parameters->modifiers);
+		fclose(outfile);
+		
+		// Warn if some frames had missing fragments
+		if(fraglist != NULL){
+			printf("Warning: missing fragment(s) on reassembly.\n");
+		}
+		
+		outfile = fopen(parameters->outfile, "wb");
+		if(outfile == NULL){
+			printf("Error - could not open output file!\n");
+			return(1);
+		}
+		// Decap the re-assembled packets
+		rewind(tempfile);
+		packets = parse_pcap(tempfile, outfile, NULL, parameters->modifiers);
+		fclose(tempfile);
+	}
+	
+	printf("\n%d frames processed.\n", packets);
+
+
 	
 	return(0);
 }
