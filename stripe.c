@@ -7,8 +7,8 @@
 #include "stripe.h"
 #include "stripe-defrag.h"
 
-#define SWVERSION "v0.2 alpha"
-#define SWRELEASEDATE "December 2014"
+#define SWVERSION "v0.3a alpha"
+#define SWRELEASEDATE "April 2015"
 
 // STRIPE (STRIP Encapsulation) attempts to peel away layers of VLAN and MPLS tags,
 // PPPoE headers, L2TP and GTP leaving plain untagged payload over Ethernet. The resulting
@@ -49,6 +49,11 @@ params_t *parseParams(int argc, char *argv[]){
 			i++;
 			continue;
 		}		
+		if(strcmp(argv[i],"-v") == 0){
+			parameters->modifiers = parameters->modifiers | DEBUGGING;
+			i++;
+			continue;
+		}		
 		// If we get any unrecognised parameters just fail
 		return(NULL);
 	}
@@ -68,6 +73,12 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 
 	// Some sanity checks
 	if(data == NULL) return(NULL);
+	
+	if((modifiers & DEBUGGING) == DEBUGGING){
+		printf("decap() called on %u bytes as type %u.\n", length, type);
+		if(length > 13) hexdump(data, 14);
+		printf("\n\n");
+	}
 
 	// Based on current encap type, try to determine what the next encap type will be
 	switch(type){
@@ -412,6 +423,12 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 		frame->plen = 0;
 		frame->fragment = 0;
 		
+		if((modifiers & DEBUGGING) == DEBUGGING){
+			printf("handling frame of %u bytes.\n", caplen);
+			if(caplen > 13) hexdump(memblock, 14);
+			printf("\n\n");
+		}
+
 		// If we are handed a NULL pointer, decapsulate. Otherwise, defragment.
 		if(fragtree == NULL){
 			decapped = decap(memblock, caplen, ETHERNET, frame, modifiers);
@@ -483,10 +500,11 @@ int main(int argc, char *argv[]){
 		printf("etc. from the frames in a PCAP file and return untagged IP over Ethernet.\n");
 		printf("Version %s, %s\n\n", SWVERSION, SWRELEASEDATE);
 		printf("Usage:\n");
-		printf("%s -r inputcapfile -w outputcapfile [-f] \n\n",argv[0]);
+		printf("%s -r inputcapfile -w outputcapfile [-f] [-v]\n\n",argv[0]);
 		printf("Where inputcapfile is a tcpdump-style .cap file containing encapsulated IP \n");
 		printf("outputcapfile is the file where the decapsulated IP will be saved\n");
 		printf("-f instructs stripe not to attempt to merge fragmented IP packets\n");
+		printf("-v enabled verbose debugging\n");
 		return(1);
 	}
 	
