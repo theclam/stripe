@@ -136,6 +136,7 @@ frame_t *insert_fragment(fragment_detail_t *frag, fragment_list_t **fragments, c
 		
 		cur->ipinfo = ipinfo;
 		cur->holes = hole(0, 65535);
+		cur->header = NULL;
 		cur->next = NULL;
 		*fragments = cur;
 		return(merge_fragment(frag, cur));	
@@ -172,7 +173,7 @@ frame_t *insert_fragment(fragment_detail_t *frag, fragment_list_t **fragments, c
 	
 	// If we got here then our IP info didn't match anything in the list.
 	// Create a new entry and populate it
-	cur = malloc(sizeof(fragment_list_t*));
+	cur = malloc(sizeof(fragment_list_t));
 	if(cur == NULL){
 		printf("Error: could not allocate memory for fragment list!\n");
 		return(NULL);
@@ -186,6 +187,7 @@ frame_t *insert_fragment(fragment_detail_t *frag, fragment_list_t **fragments, c
 		return(NULL);
 	}
 	cur->holes = hole(0, 65535);
+	cur->header = NULL;
 	cur->next = NULL;
 	
 	// Add this entry to the end of the list

@@ -474,7 +474,8 @@ int main(int argc, char *argv[]){
 						*outfile = NULL,
 						*tempfile = NULL;
 	int					packets = 0;
-	fragment_list_t		*fraglist = NULL;
+	fragment_list_t		*fraglist = NULL,
+						*cur = NULL;
 	
 	// Parse our command line parameters and verify they are usable. If not, show help.
 	parameters = parseParams(argc, argv);
@@ -545,6 +546,17 @@ int main(int argc, char *argv[]){
 		// Warn if some frames had missing fragments
 		if(fraglist != NULL){
 			printf("Warning: missing fragment(s) on reassembly.\n");
+			// Free up that junk, we're never going to use it!
+			while(fraglist != NULL){
+				cur= fraglist->next;
+				free(fraglist->ipinfo);
+				free(fraglist->data);
+				free(fraglist->holes);
+				if(fraglist->header != NULL) free(fraglist->header);
+				free(fraglist);
+				fraglist = cur;
+			}
+
 		}
 		
 		outfile = fopen(parameters->outfile, "wb");
