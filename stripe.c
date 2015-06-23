@@ -505,7 +505,7 @@ int main(int argc, char *argv[]){
 		printf("Where inputcapfile is a tcpdump-style .cap file containing encapsulated IP \n");
 		printf("outputcapfile is the file where the decapsulated IP will be saved\n");
 		printf("-f instructs stripe not to attempt to merge fragmented IP packets\n");
-		printf("-v enabled verbose debugging\n");
+		printf("-v enables verbose debugging\n");
 		return(1);
 	}
 	
