@@ -108,7 +108,10 @@ frame_t *merge_fragment(fragment_detail_t *frag, fragment_list_t *fragmentlist){
 		memcpy(frame->etype, "\x08\x00", 2);
 		frame->fragment = 0;
 	}
-	
+
+	free(frag->data);
+        free(frag);
+
 	// Return a frame if we got one or NULL otherwise
 	return(frame);
 }
