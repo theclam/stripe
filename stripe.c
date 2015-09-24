@@ -7,11 +7,11 @@
 #include "stripe.h"
 #include "stripe-defrag.h"
 
-#define SWVERSION "v0.3a alpha"
-#define SWRELEASEDATE "April 2015"
+#define SWVERSION "v0.3b"
+#define SWRELEASEDATE "September 2015"
 
-// STRIPE (STRIP Encapsulation) attempts to peel away layers of VLAN and MPLS tags,
-// PPPoE headers, L2TP and GTP leaving plain untagged payload over Ethernet. The resulting
+// STRIPE (STRIP Encapsulation) attempts to peel away layers of VLAN and MPLS tags, PPPoE
+// L2TP, GTP and VXLAN headers leaving plain untagged payload over Ethernet. The resulting
 // plain frames are then saved in a pcap file which can then be fed to applications that
 // are not able to deal with the additional headers. 
 // Written by Foeh Mannay
@@ -256,6 +256,8 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 				return(decap(data + 8, length - 8, L2TP, frame, modifiers));
 			} else if(memcmp(data + 2, "\x08\x68", 2) == 0){// GTP
 				return(decap(data + 8, length - 8, GTP, frame, modifiers));
+			} else if((memcmp(data + 2, "\x12\xb5", 2) == 0) || (memcmp(data + 2, "\x21\x18", 2) == 0)){	// VXLAN
+				return(decap(data + 8, length - 8, VXLAN, frame, modifiers));
 			} else return(frame);
 		break;
 		case L2TP:
@@ -327,6 +329,20 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			frame->payload = data + pos;
 			memcpy(frame->etype, "\x08\x00", 2);
 			return(decap(data + pos, vlen - pos, IPv4, frame, modifiers));
+			
+		break;
+		case VXLAN:
+			// If we get a VXLAN candidate packet, sanity check then deal with the payload.
+			if(length < 22) return(frame); // Too short
+			
+			// Assume all reserved bits are zero - may need to update this in future
+			if(memcmp(data, "\x08\x00\x00\x00", 4) != 0){
+				// header not found, bail out
+				return(frame);
+			} else {
+				// VXLAN header present, update frame and go for Ethernet
+				return(decap(data + 8, length - 8, ETHERNET, frame, modifiers));
+			}
 			
 		break;
 		case UNKNOWN:

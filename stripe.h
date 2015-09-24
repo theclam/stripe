@@ -23,6 +23,7 @@
 #define UNKNOWN '\x11'
 #define GRE '\x12'
 #define GTP '\x13'
+#define VXLAN '\x14'
 
 #define CHECKSUM_PRESENT '\x80'
 #define ROUTING_PRESENT '\x40'
