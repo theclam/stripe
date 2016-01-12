@@ -111,7 +111,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
             		return(decap(data + 14, length - 14, UNKNOWN, frame, modifiers));
 			break;
 		case VLAN:
-			if(length < 4) return(NULL);
+			if(length < 4) return(frame);
 			frame->plen = length - 4;
 			frame->payload = data + 4;
 			memcpy(frame->etype, data+2, 2);
@@ -137,7 +137,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			return(decap(data + 4, length - 4, UNKNOWN, frame, modifiers));
 			break;
 		case MPLS:
-			if(length < 4) return(NULL);
+			if(length < 4) return(frame);
 			frame->plen = length - 4;
 			frame->payload = data + 4;
 			
@@ -187,8 +187,8 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 		break;
 		case IPv4:
 			// If the protocol is IPv4 we may find some GRE / L2TP encap
-			if(length < 20) return(NULL);
-			if(length < 4 * (data[0] & 15)) return(NULL);
+			if(length < 20) return(frame);
+			if(length < 4 * (data[0] & 15)) return(frame);
             
             frame->payload = data;
             frame->plen = length;
@@ -250,7 +250,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 		break;
 		case UDP:
 			// If the protocol is UDP, check for L2TP port numbers
-			if(length < 8) return(NULL);
+			if(length < 8) return(frame);
 			
 			if(memcmp(data + 2, "\x06\xa5", 2) == 0){		// L2TP
 				return(decap(data + 8, length - 8, L2TP, frame, modifiers));
@@ -285,18 +285,18 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			vlen = (256*(unsigned char)data[2])+(unsigned char)data[3];
 
 			if((data[0] & '\x07') != 0) {						// Long header
-				if(vlen > (length - 8)) return(NULL);			// If the header says length > remaining data, bail out
+				if(vlen > (length - 8)) return(frame);			// If the header says length > remaining data, bail out
 				
 				pos = 12;
 				if(((unsigned char)data[0] & '\x04') != 0) {
 					while((unsigned char)data[pos-1] != 0){		// Shave off any extension headers
-						if(((unsigned char)data[pos]) == '\x00') return(NULL);	// avoid getting stuck for zero length extension headers
+						if(((unsigned char)data[pos]) == '\x00') return(frame);	// avoid getting stuck for zero length extension headers
 						pos += (((unsigned char)data[pos]) * 4);
-						if(pos > vlen) return(NULL);			// Check we're not over-reading
+						if(pos > vlen) return(frame);			// Check we're not over-reading
 					}
 				}
 			} else {											// Short header
-				if(vlen > (length - 8)) return(NULL);			// If the header says length > remaining data, bail out
+				if(vlen > (length - 8)) return(frame);			// If the header says length > remaining data, bail out
 				pos = 8;
 			}
 			
