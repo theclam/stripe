@@ -7,8 +7,8 @@
 #include "stripe.h"
 #include "stripe-defrag.h"
 
-#define SWVERSION "v0.3b"
-#define SWRELEASEDATE "September 2015"
+#define SWVERSION "v0.3c"
+#define SWRELEASEDATE "January 2016"
 
 // STRIPE (STRIP Encapsulation) attempts to peel away layers of VLAN and MPLS tags, PPPoE
 // L2TP, GTP and VXLAN headers leaving plain untagged payload over Ethernet. The resulting
@@ -163,14 +163,14 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 		break;
 		case PPPoE:
 			// Only a PPP header can follow a PPPoE session header
-			if(length < 6) return(NULL);
+			if(length < 6) return(frame);
 			frame->payload = data;
 			frame->plen = length;
 			return(decap(data + 6, length - 6, PPP, frame, modifiers));
 		break;
 		case PPP:
 			// Should be IPv4 or IPv6 behind this, otherwise bail.
-			if(length < 2) return(NULL);
+			if(length < 2) return(frame);
 
 			if(memcmp(data, "\x00\x21", 2) == 0){				// IPv4
 				memcpy(frame->etype, "\x08\x00", 2);
@@ -261,43 +261,19 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			} else return(frame);
 		break;
 		case L2TP:
-			// If we get an L2TP data packet, deal with the payload.
-			if(length < 12) return(NULL);
-			if(((data[1] & '\x0f') != '\x02') || ((data[0] & '\xcb') != '\xc8')) return(NULL);
-			vlen = (256*(unsigned char)data[2])+(unsigned char)data[3];
-			if(vlen > length) return(NULL);	// If the header says length > remaining data, bail out
-			
-			return(decap(data + 12, vlen - 12, L2AVP, frame, modifiers));
-		break;
-		case L2AVP:
-			// Work through the L2TP AVPs to try and gather auths.
-			if(length < 6){
-				printf("short?\n");
-				return(frame);
-			} else return(frame);
-			vlen = (256 * ((unsigned char)data[0] & 3)) + (unsigned char)data[1];
-			if(vlen > length) return(NULL);
-			
-			// If this isn't a reserved AVP, we're not interested.
-			if(memcmp(data + 2, "\x00\x00\x00", 3) != 0) return(decap(data + vlen, length - vlen, L2AVP, frame, modifiers));
-			
-			switch(data[5]){
-				case '\x00':		// Control message type
-					// CHAP should only be in an ICCN message, so abandon anything else
-					if(memcmp(data + 6, "\x00\x0c", 2) != 0){
-						return(NULL);
-					}
-				break;
-				case '\x1e':		// Username
-				break;
-				case '\x1f':		// CHAP challenge data
-				break;
-				case '\x20':		// Authentication ID
-				break;
-				case '\x21':		// CHAP response data
-				break;	
-			}
-			return(decap(data + vlen, length - vlen, L2AVP, frame, modifiers));
+			// If we get an L2TPv2 data packet, deal with the payload.
+			// This only handles zero offset with no Ns / Nr as produced by IOS. Will need
+			// to test this against JunOS at some point to see if behaviour is different.
+			if(length < 10) return(frame);
+			if(	(data[0] == '\x02') && 
+				(data[1] == '\x02') &&
+				(data[6] == '\x00') &&
+				(data[7] == '\x00') &&
+				(data[8] == '\xff') &&
+				(data[9] == '\x03') ) 
+					return(decap(data + 10, length - 10, PPP, frame, modifiers));
+			// Otherwise, not L2TPv2 frame in the basic format we can handle
+			return(frame);
 		break;
 		case GTP:
 			// If we get a GTP data packet, deal with the payload.
@@ -440,7 +416,7 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 		frame->fragment = 0;
 		
 		if((modifiers & DEBUGGING) == DEBUGGING){
-			printf("handling frame of %u bytes.\n", caplen);
+			printf("handling frame %u of %u bytes.\n", decapcount+1, caplen);
 			if(caplen > 13) hexdump(memblock, 14);
 			printf("\n\n");
 		}
@@ -518,7 +494,7 @@ int main(int argc, char *argv[]){
 		printf("Version %s, %s\n\n", SWVERSION, SWRELEASEDATE);
 		printf("Usage:\n");
 		printf("%s -r inputcapfile -w outputcapfile [-f] [-v]\n\n",argv[0]);
-		printf("Where inputcapfile is a tcpdump-style .cap file containing encapsulated IP \n");
+		printf("Where:\ninputcapfile is a tcpdump-style .cap file containing encapsulated IP \n");
 		printf("outputcapfile is the file where the decapsulated IP will be saved\n");
 		printf("-f instructs stripe not to attempt to merge fragmented IP packets\n");
 		printf("-v enables verbose debugging\n");

@@ -1,5 +1,5 @@
-stripe v0.3b
-Written by Foeh Mannay, September 2015
+stripe v0.3c
+Written by Foeh Mannay, January 2016
 
 PURPOSE
 =======
@@ -54,3 +54,5 @@ v0.2a	Added "experimental" GTP support, realised the need to pad small frames!
 v0.3a	Added IP fragment reassembly support
 
 v0.3b	Added VXLAN support
+
+v0.3c	Fixed L2TPv2 support, which flat out didn't work up until now.
