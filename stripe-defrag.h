@@ -267,7 +267,7 @@ frame_t *reassemble(char *data, unsigned int length, char type, frame_t *frame, 
 	}
 	
 	// Populate the frame header and etype
-	frame->ether = data;
+	frame->l2 = data;
 	memcpy(frame->etype, data+12, 2);
 	frame->plen = length - 14;
 	
@@ -286,7 +286,7 @@ frame_t *reassemble(char *data, unsigned int length, char type, frame_t *frame, 
 	// For fragments, attempt to re-assemble	
 	frame = handle_ipv4_fragment(data+14, length-14, frame, fragments);
 	if(frame != NULL){
-		frame->ether = data;
+		frame->l2 = data;
 	}
 	return(frame);
 }

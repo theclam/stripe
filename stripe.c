@@ -1,5 +1,6 @@
 
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,11 +66,14 @@ params_t *parseParams(int argc, char *argv[]){
 }
 
 frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int modifiers){
-// The decap() function takes in a  pointer to a (partial) frame, the size of the 
+// The decap() function takes in a pointer to a (partial) frame, the size of the
 // data, a hint indicating the encap type and a frame template and attempts to
 // fill the frame template with the required details.
 	int vlen = 0;
 	int pos = 0;
+	int min_length = -1;
+	int ethertype_offset = -1;
+	int l2_header_length = -1;
 
 	// Some sanity checks
 	if(data == NULL) return(NULL);
@@ -83,32 +87,44 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 	// Based on current encap type, try to determine what the next encap type will be
 	switch(type){
 		case ETHERNET:
-			if(length < 14) return(NULL);
+		case SLL:
+			if(type == ETHERNET) {
+				min_length = 14;
+				ethertype_offset = 12;
+				l2_header_length = 14;
+			} else if(type == SLL) {
+				min_length = 16;
+				ethertype_offset = 14;
+				l2_header_length = 16;
+			}
+
+			if(length < min_length) return(NULL);
 			
-			// Populate the ethernet portion then copy the EtherType
-			frame->ether = data;
-			memcpy(frame->etype, data+12, 2);
-			frame->plen = length - 14;
-			frame->payload = data + 14;
+			// Populate the L2 portion then copy the EtherType
+			frame->l2 = data;
+			memcpy(frame->etype, data+ethertype_offset, 2);
+      int ethertype = ntohs(*(uint16_t *)(data+ethertype_offset));
+			frame->plen = length - l2_header_length;
+			frame->payload = data + l2_header_length;
 			
 			// VLAN tag next?
-			if(memcmp(data+12, "\x81\x00", 2) == 0 || memcmp(data+12, "\x91\x00", 2) == 0){
-				return(decap(data + 14, length - 14, VLAN, frame, modifiers));
+			if(ethertype == ETH_P_8021Q || ethertype == ETH_P_QINQ1){
+				return(decap(data + l2_header_length, length - l2_header_length, VLAN, frame, modifiers));
 			}
 			// MPLS tag next?
-			if(memcmp(data+12, "\x88\x47", 2) == 0){
-				return(decap(data + 14, length - 14, MPLS, frame, modifiers));
+			if(ethertype == ETH_P_MPLS_UC){
+				return(decap(data + l2_header_length, length - l2_header_length, MPLS, frame, modifiers));
 			}
 			// PPPoE session data next?
-			if(memcmp(data+12, "\x88\x64", 2) == 0){
-				return(decap(data + 14, length - 14, PPPoE, frame, modifiers));
+			if(ethertype == ETH_P_PPP_SES){
+				return(decap(data + l2_header_length, length - l2_header_length, PPPoE, frame, modifiers));
 			}
 			// IP next?
-			if(memcmp(data+12, "\x08\x00",2) == 0){
-				return(decap(data + 14, length - 14, IPv4, frame, modifiers));
+			if(ethertype == ETH_P_IP){
+				return(decap(data + l2_header_length, length - l2_header_length, IPv4, frame, modifiers));
 			}
 			// Something else next?
-            		return(decap(data + 14, length - 14, UNKNOWN, frame, modifiers));
+			return(decap(data + l2_header_length, length - l2_header_length, UNKNOWN, frame, modifiers));
 			break;
 		case VLAN:
 			if(length < 4) return(frame);
@@ -361,7 +377,7 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 		return(0);
 	}
 	// Verify the magic number in the header indicates a pcap file
-	if(((pcap_hdr_t*)memblock)->magic_number != 2712847316){
+	if(((pcap_hdr_t*)memblock)->magic_number != 0xa1b2c3d4){
 		printf("\nError!\nThis is not a valid pcap file. If it has been saved as pcap-ng\nconsider converting it to original pcap format with tshark or similar.\n");
 		if(memblock != NULL) free(memblock); 
 		return(0);
@@ -384,6 +400,12 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 	if(fwrite(memblock, 1, sizeof(pcap_hdr_t), outfile) != sizeof(pcap_hdr_t)){
 		printf("Error: unable to write pcap header to output file!\n");
 		return(0);
+	}
+
+	// Get the link type.
+	char linktype = ETHERNET;
+	if (((pcap_hdr_t*)memblock)->network == DLT_LINUX_SLL) {
+		linktype = SLL;
 	}
 
 	// Read in each frame.
@@ -409,7 +431,7 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 		}
 		
 		// Attempt to decapsulate the frame
-		frame->ether = NULL;
+		frame->l2 = NULL;
 		memcpy(frame->etype, "\x00\x00", 2);
 		frame->payload = NULL;
 		frame->plen = 0;
@@ -423,29 +445,38 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 
 		// If we are handed a NULL pointer, decapsulate. Otherwise, defragment.
 		if(fragtree == NULL){
-			decapped = decap(memblock, caplen, ETHERNET, frame, modifiers);
+			decapped = decap(memblock, caplen, linktype, frame, modifiers);
 			fragmented = (fragmented | decapped->fragment);
 		} else {
-			decapped = reassemble(memblock, caplen, ETHERNET, frame, fragtree);
+			decapped = reassemble(memblock, caplen, linktype, frame, fragtree);
 		}
 		
 		// Write the decapsulated frame to the output file
 		if(decapped != NULL){
 			decapcount++;
 
+			int ethertype_offset = -1;
+			int l2_header_length = -1;
+			if(linktype == ETHERNET) {
+				ethertype_offset = 12;
+				l2_header_length = 14;
+			} else if(linktype == SLL) {
+				ethertype_offset = 14;
+				l2_header_length = 16;
+			}
 			if(decapped->plen < 46) { // pad undersized frames!
 				rechdr->incl_len = 60;
 				rechdr->orig_len = 60;
 			} else {
-				rechdr->incl_len = decapped->plen+14;
-				rechdr->orig_len = decapped->plen+14;
+				rechdr->incl_len = decapped->plen+l2_header_length;
+				rechdr->orig_len = decapped->plen+l2_header_length;
 			}
 						
 			if(fwrite(rechdr, 1, sizeof(pcaprec_hdr_t), outfile) != sizeof(pcaprec_hdr_t)){
 				printf("Error: unable to write pcap record header to output file!\n");
 				return(0);
 			}
-			if(fwrite(decapped->ether, 1, 12, outfile) != 12){
+			if(fwrite(decapped->l2, 1, ethertype_offset, outfile) != ethertype_offset){
 				printf("Error: unable to write frame to output pcap file\n");
 				return(0);
 			}
@@ -586,5 +617,3 @@ int main(int argc, char *argv[]){
 	
 	return(0);
 }
-
-
