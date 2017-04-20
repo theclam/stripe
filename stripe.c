@@ -347,7 +347,6 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 					}
 				}
 			} else {											// Short header
-				if(vlen > (length - 8)) return(frame);			// If the header says length > remaining data, bail out
 				pos = 8;
 			}
 
