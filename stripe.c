@@ -498,13 +498,8 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 				ethertype_offset = 14;
 				l2_header_length = 16;
 			}
-			if(decapped->plen < 46) { // pad undersized frames!
-				rechdr->incl_len = 60;
-				rechdr->orig_len -= caplen - rechdr->incl_len;
-			} else {
-				rechdr->incl_len = decapped->plen+l2_header_length;
-				rechdr->orig_len -= caplen - rechdr->incl_len;
-			}
+			rechdr->incl_len = decapped->plen+l2_header_length;
+			rechdr->orig_len -= caplen - rechdr->incl_len;
 
 			if(fwrite(rechdr, 1, sizeof(pcaprec_hdr_t), outfile) != sizeof(pcaprec_hdr_t)){
 				printf("Error: unable to write pcap record header to output file!\n");
@@ -521,12 +516,6 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 			if(fwrite(decapped->payload, 1, decapped->plen, outfile) != decapped->plen){
 				printf("Error: unable to write frame to output pcap file\n");
 				return(0);
-			}
-			if(decapped->plen < 46) { // pad undersized frames!
-				if(fwrite(PADDING, 1, (46 - frame->plen), outfile) != (46 - decapped->plen)){
-					printf("Error: unable to write frame padding to output pcap file\n");
-					return(0);
-				}
 			}
 		}
 	}
