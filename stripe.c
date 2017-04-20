@@ -501,10 +501,10 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 			}
 			if(decapped->plen < 46) { // pad undersized frames!
 				rechdr->incl_len = 60;
-				rechdr->orig_len = 60;
+				rechdr->orig_len -= caplen - rechdr->incl_len;
 			} else {
 				rechdr->incl_len = decapped->plen+l2_header_length;
-				rechdr->orig_len = decapped->plen+l2_header_length;
+				rechdr->orig_len -= caplen - rechdr->incl_len;
 			}
 
 			if(fwrite(rechdr, 1, sizeof(pcaprec_hdr_t), outfile) != sizeof(pcaprec_hdr_t)){
