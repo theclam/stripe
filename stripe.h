@@ -25,6 +25,7 @@
 #define GTP '\x13'
 #define VXLAN '\x14'
 #define SLL '\x15'
+#define IPv6 '\x16'
 
 #define CHECKSUM_PRESENT '\x80'
 #define ROUTING_PRESENT '\x40'
