@@ -1,5 +1,6 @@
 
 
+#include <arpa/inet.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,9 +83,9 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 	if(data == NULL) return(NULL);
 
 	if((modifiers & DEBUGGING) == DEBUGGING){
-		printf("decap() called on %u bytes as type %u.\n", length, type);
+		fprintf(stderr, "decap() called on %u bytes as type %u.\n", length, type);
 		if(length > 13) hexdump(data, 14);
-		printf("\n\n");
+		fprintf(stderr, "\n\n");
 	}
 
 	// Based on current encap type, try to determine what the next encap type will be
@@ -381,7 +382,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 	return(NULL);
 }
 
-int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int modifiers){
+int parse_pcap(FILE *infile, FILE *outfile, fragment_list_t **fragtree, int modifiers){
 	char 				*memblock = NULL;
 	frame_t				*frame = NULL,
 						*decapped = NULL;
@@ -391,48 +392,48 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 	pcaprec_hdr_t		*rechdr = NULL;
 
 	if(fragtree == NULL){
-		printf("\nDecapsulating...\n");
+		fprintf(stderr, "\nDecapsulating...\n");
 	} else {
-		printf("\nReassembling...\n");
+		fprintf(stderr, "\nReassembling...\n");
 	}
 
 	// Start parsing the capture file:
-	rewind(capfile);
-	clearerr(capfile);
+	if(infile != stdin) {
+		rewind(infile);
+		clearerr(infile);
+	}
 	memblock = (char*)malloc(sizeof(pcap_hdr_t));
 	if(memblock == NULL){
-		printf("Insufficient memory to load capture header.\n");
+		fprintf(stderr, "Insufficient memory to load capture header.\n");
 		return(0);
 	}
 	// Read the pcap header
-	if(fread (memblock, 1, sizeof(pcap_hdr_t), capfile) != sizeof(pcap_hdr_t)){
-		printf("Truncated capture file header - aborting.\n");
+	if(fread (memblock, 1, sizeof(pcap_hdr_t), infile) != sizeof(pcap_hdr_t)){
+		fprintf(stderr, "Truncated capture file header - aborting.\n");
 		if(memblock != NULL) free(memblock);
 		return(0);
 	}
 	// Verify the magic number in the header indicates a pcap file
 	if(((pcap_hdr_t*)memblock)->magic_number != 0xa1b2c3d4){
-		printf("\nError!\nThis is not a valid pcap file. If it has been saved as pcap-ng\nconsider converting it to original pcap format with tshark or similar.\n");
+		fprintf(stderr, "\nError!\nThis is not a valid pcap file. If it has been saved as pcap-ng\nconsider converting it to original pcap format with tshark or similar.\n");
 		if(memblock != NULL) free(memblock);
 		return(0);
 	}
 	// Create the frame template used in the decap process
 	frame = malloc(sizeof(frame_t));
 	if(frame == NULL){
-		printf("Error: unable to allocate memory for frame template!\n");
+		fprintf(stderr, "Error: unable to allocate memory for frame template!\n");
 		return(0);
 	}
 	// Allocate memory for the PCAP record header
 	rechdr = (pcaprec_hdr_t*)malloc(sizeof(pcaprec_hdr_t));
 	if(rechdr == NULL){
-		printf("Error: unable to allocate memory for pcap record header!\n");
+		fprintf(stderr, "Error: unable to allocate memory for pcap record header!\n");
 		return(0);
 	}
 	// Clone the input file's header
-	rewind(outfile);
-	clearerr(outfile);
 	if(fwrite(memblock, 1, sizeof(pcap_hdr_t), outfile) != sizeof(pcap_hdr_t)){
-		printf("Error: unable to write pcap header to output file!\n");
+		fprintf(stderr, "Error: unable to write pcap header to output file!\n");
 		return(0);
 	}
 
@@ -443,24 +444,24 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 	}
 
 	// Read in each frame.
-	while((!feof(capfile)) & (!ferror(capfile))) {
+	while((!feof(infile)) & (!ferror(infile))) {
 		free(memblock);
 		// Get the packet record header and examine it for the packet size
-		caplen = fread (rechdr, 1, sizeof(pcaprec_hdr_t), capfile);
+		caplen = fread (rechdr, 1, sizeof(pcaprec_hdr_t), infile);
 		if(caplen != sizeof(pcaprec_hdr_t)){
-			if(caplen > 0) printf("Error: Truncated pcap file reading record header, %u/%lu!\n", caplen, sizeof(pcaprec_hdr_t));
+			if(caplen > 0) fprintf(stderr, "Error: Truncated pcap file reading record header, %u/%lu!\n", caplen, sizeof(pcaprec_hdr_t));
 			break;
 		}
 		caplen = rechdr->incl_len;
 
 		memblock = malloc(caplen);
 		if(memblock == NULL){
-			printf("Error: Could not allocate memory for pcap record header!\n");
+			fprintf(stderr, "Error: Could not allocate memory for pcap record header!\n");
 			return(decapcount);
 		}
 		// Get the actual packet data and attempt to parse it
-		if(fread (memblock, 1, caplen, capfile) != caplen){
-			printf("Error: Truncated pcap file reading capture!\n");
+		if(fread (memblock, 1, caplen, infile) != caplen){
+			fprintf(stderr, "Error: Truncated pcap file reading capture!\n");
 			break;
 		}
 
@@ -472,9 +473,9 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 		frame->fragment = 0;
 
 		if((modifiers & DEBUGGING) == DEBUGGING){
-			printf("handling frame %u of %u bytes.\n", decapcount+1, caplen);
+			fprintf(stderr, "handling frame %u of %u bytes.\n", decapcount+1, caplen);
 			if(caplen > 13) hexdump(memblock, 14);
-			printf("\n\n");
+			fprintf(stderr, "\n\n");
 		}
 
 		// If we are handed a NULL pointer, decapsulate. Otherwise, defragment.
@@ -502,19 +503,19 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 			rechdr->orig_len -= caplen - rechdr->incl_len;
 
 			if(fwrite(rechdr, 1, sizeof(pcaprec_hdr_t), outfile) != sizeof(pcaprec_hdr_t)){
-				printf("Error: unable to write pcap record header to output file!\n");
+				fprintf(stderr, "Error: unable to write pcap record header to output file!\n");
 				return(0);
 			}
 			if(fwrite(decapped->l2, 1, ethertype_offset, outfile) != ethertype_offset){
-				printf("Error: unable to write frame to output pcap file\n");
+				fprintf(stderr, "Error: unable to write frame to output pcap file\n");
 				return(0);
 			}
 			if(fwrite(decapped->etype, 1, 2, outfile) != 2){
-				printf("Error: unable to write frame to output pcap file\n");
+				fprintf(stderr, "Error: unable to write frame to output pcap file\n");
 				return(0);
 			}
 			if(fwrite(decapped->payload, 1, decapped->plen, outfile) != decapped->plen){
-				printf("Error: unable to write frame to output pcap file\n");
+				fprintf(stderr, "Error: unable to write frame to output pcap file\n");
 				return(0);
 			}
 		}
@@ -543,33 +544,43 @@ int main(int argc, char *argv[]){
 	// Parse our command line parameters and verify they are usable. If not, show help.
 	parameters = parseParams(argc, argv);
 	if(parameters == NULL){
-		printf("stripe: a utility to remove VLAN tags, MPLS shims, PPPoE, L2TP headers,\n");
-		printf("etc. from the frames in a PCAP file and return untagged IP over Ethernet.\n");
-		printf("Version %s, %s\n\n", SWVERSION, SWRELEASEDATE);
-		printf("Usage:\n");
-		printf("%s -r inputcapfile -w outputcapfile [-f] [-v]\n\n",argv[0]);
-		printf("Where:\ninputcapfile is a tcpdump-style .cap file containing encapsulated IP \n");
-		printf("outputcapfile is the file where the decapsulated IP will be saved\n");
-		printf("-f instructs stripe not to attempt to merge fragmented IP packets\n");
-		printf("-v enables verbose debugging\n");
+		fprintf(stderr, "stripe: a utility to remove VLAN tags, MPLS shims, PPPoE, L2TP headers,\n");
+		fprintf(stderr, "etc. from the frames in a PCAP file and return untagged IP over Ethernet.\n");
+		fprintf(stderr, "Version %s, %s\n\n", SWVERSION, SWRELEASEDATE);
+		fprintf(stderr, "Usage:\n");
+		fprintf(stderr, "%s -r inputcapfile -w outputcapfile [-f] [-v]\n\n",argv[0]);
+		fprintf(stderr, "Where:\ninputcapfile is a tcpdump-style .cap file containing encapsulated IP ('-r -' for stdin)\n");
+		fprintf(stderr, "outputcapfile is the file where the decapsulated IP will be saved ('-w -' for stdout)\n");
+		fprintf(stderr, "-f instructs stripe not to attempt to merge fragmented IP packets\n");
+		fprintf(stderr, "-v enables verbose debugging\n");
 		return(1);
 	}
 
 	// Attempt to open the capture file, defragment and decap:
-	infile = fopen(parameters->infile,"rb");
-	if (infile == NULL) {
-		printf("\nError!\nUnable to open input capture file!\n");
-		return(1);
+  if(parameters->infile[0] == '-' && parameters->infile[1] == '\0') {
+		// Use stdin
+		infile = stdin;
+	} else {
+		infile = fopen(parameters->infile,"rb");
+		if (infile == NULL) {
+			fprintf(stderr, "\nError!\nUnable to open input capture file!\n");
+			return(1);
+		}
 	}
 	tempfile = tmpfile();
 	if(tempfile == NULL){
-		printf("Error - could not create temporary file!\n");
+		fprintf(stderr, "Error - could not create temporary file!\n");
 		return(1);
 	}
-	outfile = fopen(parameters->outfile, "wb");
-	if(outfile == NULL){
-		printf("Error - could not open output file!\n");
-		return(1);
+  if(parameters->outfile[0] == '-' && parameters->outfile[1] == '\0') {
+		// Use stdout
+		outfile = stdout;
+	} else {
+		outfile = fopen(parameters->outfile, "wb");
+		if(outfile == NULL){
+			fprintf(stderr, "Error - could not open output file!\n");
+			return(1);
+		}
 	}
 
 	if((parameters->modifiers & NODEFRAG) == 0){
@@ -577,39 +588,50 @@ int main(int argc, char *argv[]){
 		rewind(tempfile);
 		packets = parse_pcap(tempfile, outfile, NULL, parameters->modifiers);
 	} else {
-		printf("Reassembly disabled...\n");
+		fprintf(stderr, "Reassembly disabled...\n");
 		packets = parse_pcap(infile, outfile, NULL, parameters->modifiers);
 	}
 
-	fclose(infile);
+	if(infile != stdout) {
+		fclose(infile);
+	}
 	fclose(tempfile);
-	fclose(outfile);
+	if(outfile != stdout) {
+		fclose(outfile);
+	}
 
 
 
 	// If we need to re-assemble, do so and re-parse
 	while((packets == -1) && ((parameters->modifiers & NODEFRAG) == 0)){
-		printf("got fragments, need to reassemble...\n");
+		fprintf(stderr, "got fragments, need to reassemble...\n");
 		// Create temporary file for use when re-assembling fragments
 		tempfile = tmpfile();
 		if(tempfile == NULL){
-			printf("Error - could not create temporary file!\n");
+			fprintf(stderr, "Error - could not create temporary file!\n");
 			return(1);
 		}
-		// Re-open outfile for reading
-		outfile = fopen(parameters->outfile, "rb");
-		if(outfile == NULL){
-			printf("Error - could not open output file!\n");
-			return(1);
+  	if(parameters->outfile[0] == '-' && parameters->outfile[1] == '\0') {
+			// Use stdout
+			outfile = stdout;
+		} else {
+			// Re-open outfile for reading
+			outfile = fopen(parameters->outfile, "rb");
+			if(outfile == NULL){
+				fprintf(stderr, "Error - could not open output file!\n");
+				return(1);
+			}
 		}
 
 		// Re-assemble into the temporary file
 		parse_pcap(outfile, tempfile, &fraglist, parameters->modifiers);
-		fclose(outfile);
+		if(outfile != stdout) {
+			fclose(outfile);
+		}
 
 		// Warn if some frames had missing fragments
 		if(fraglist != NULL){
-			printf("Warning: missing fragment(s) on reassembly.\n");
+			fprintf(stderr, "Warning: missing fragment(s) on reassembly.\n");
 			// Free up that junk, we're never going to use it!
 			while(fraglist != NULL){
 				cur= fraglist->next;
@@ -623,18 +645,26 @@ int main(int argc, char *argv[]){
 
 		}
 
-		outfile = fopen(parameters->outfile, "wb");
-		if(outfile == NULL){
-			printf("Error - could not open output file!\n");
-			return(1);
+  	if(parameters->outfile[0] == '-' && parameters->outfile[1] == '\0') {
+			// Use stdout
+			outfile = stdout;
+		} else {
+			outfile = fopen(parameters->outfile, "wb");
+			if(outfile == NULL){
+				fprintf(stderr, "Error - could not open output file!\n");
+				return(1);
+			}
 		}
 		// Decap the re-assembled packets
 		rewind(tempfile);
 		packets = parse_pcap(tempfile, outfile, NULL, parameters->modifiers);
+		if(outfile != stdout) {
+			fclose(outfile);
+		}
 		fclose(tempfile);
 	}
 
-	printf("\n%d frames processed.\n", packets);
+	fprintf(stderr, "\n%d frames processed.\n", packets);
 
 
 
