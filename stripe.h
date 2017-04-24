@@ -24,6 +24,8 @@
 #define GRE '\x12'
 #define GTP '\x13'
 #define VXLAN '\x14'
+#define SLL '\x15'
+#define IPv6 '\x16'
 
 #define CHECKSUM_PRESENT '\x80'
 #define ROUTING_PRESENT '\x40'
@@ -35,11 +37,37 @@
 #define NODEFRAG '\x01'
 #define DEBUGGING '\x02'
 
-#define PADDING "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+// pcap constants
+// Ethernet (10Mb)
+#define DLT_EN10MB  1
+// Linux cooked sockets.
+#define DLT_LINUX_SLL 113
+
+// if_ether.h constants
+#ifndef ETH_P_8021Q
+#define ETH_P_8021Q 0x8100          /* 802.1Q VLAN Extended Header  */
+#endif
+#ifndef ETH_P_QINQ1
+#define ETH_P_QINQ1 0x9100    /* deprecated QinQ VLAN [ NOT AN OFFICIALLY REGISTERED ID ] */
+#endif
+#ifndef ETH_P_MPLS_UC
+#define ETH_P_MPLS_UC 0x8847    /* MPLS Unicast traffic   */
+#endif
+#ifndef ETH_P_PPP_SES
+#define ETH_P_PPP_SES 0x8864    /* PPPoE session messages */
+#endif
+#ifndef ETH_P_IP
+#define ETH_P_IP  0x0800    /* Internet Protocol packet */
+#endif
+#ifndef ETH_P_IPV6
+#define ETH_P_IPV6  0x86DD    /* IPv6 over bluebook   */
+#endif
+
 
 typedef struct frame_s {
 // A data type to store the bits we need to construct a simple frame from a more complex one.
-	char 		*ether;
+	char 		*l2;
 	char		*payload;
 	unsigned int	plen;
 	char 		etype[2];

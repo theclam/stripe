@@ -1,5 +1,7 @@
 
 
+#include <arpa/inet.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,7 +15,7 @@
 // STRIPE (STRIP Encapsulation) attempts to peel away layers of VLAN and MPLS tags, PPPoE
 // L2TP, GTP and VXLAN headers leaving plain untagged payload over Ethernet. The resulting
 // plain frames are then saved in a pcap file which can then be fed to applications that
-// are not able to deal with the additional headers. 
+// are not able to deal with the additional headers.
 // Written by Foeh Mannay
 // Please refer to http://networkbodges.blogspot.com for more information about this tool.
 // This software is released under the Modified BSD license.
@@ -48,12 +50,12 @@ params_t *parseParams(int argc, char *argv[]){
 			parameters->modifiers = parameters->modifiers | NODEFRAG;
 			i++;
 			continue;
-		}		
+		}
 		if(strcmp(argv[i],"-v") == 0){
 			parameters->modifiers = parameters->modifiers | DEBUGGING;
 			i++;
 			continue;
-		}		
+		}
 		// If we get any unrecognised parameters just fail
 		return(NULL);
 	}
@@ -65,73 +67,100 @@ params_t *parseParams(int argc, char *argv[]){
 }
 
 frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int modifiers){
-// The decap() function takes in a  pointer to a (partial) frame, the size of the 
+// The decap() function takes in a pointer to a (partial) frame, the size of the
 // data, a hint indicating the encap type and a frame template and attempts to
 // fill the frame template with the required details.
 	int vlen = 0;
 	int pos = 0;
+	int min_length = -1;
+	int ethertype_offset = -1;
+	int ethertype = -1;
+	int l2_header_length = -1;
+	int header_length = -1;
+	int dst_port = -1;
 
 	// Some sanity checks
 	if(data == NULL) return(NULL);
-	
+
 	if((modifiers & DEBUGGING) == DEBUGGING){
-		printf("decap() called on %u bytes as type %u.\n", length, type);
+		fprintf(stderr, "decap() called on %u bytes as type %u.\n", length, type);
 		if(length > 13) hexdump(data, 14);
-		printf("\n\n");
+		fprintf(stderr, "\n\n");
 	}
 
 	// Based on current encap type, try to determine what the next encap type will be
 	switch(type){
 		case ETHERNET:
-			if(length < 14) return(NULL);
-			
-			// Populate the ethernet portion then copy the EtherType
-			frame->ether = data;
-			memcpy(frame->etype, data+12, 2);
-			frame->plen = length - 14;
-			frame->payload = data + 14;
-			
+		case SLL:
+			if(type == ETHERNET) {
+				min_length = 14;
+				ethertype_offset = 12;
+				l2_header_length = 14;
+			} else if(type == SLL) {
+				min_length = 16;
+				ethertype_offset = 14;
+				l2_header_length = 16;
+			}
+
+			if(length < min_length) return(NULL);
+
+			// Populate the L2 portion then copy the EtherType
+			frame->l2 = data;
+			memcpy(frame->etype, data+ethertype_offset, 2);
+			ethertype = ntohs(*(uint16_t *)(data+ethertype_offset));
+			frame->plen = length - l2_header_length;
+			frame->payload = data + l2_header_length;
+
 			// VLAN tag next?
-			if(memcmp(data+12, "\x81\x00", 2) == 0 || memcmp(data+12, "\x91\x00", 2) == 0){
-				return(decap(data + 14, length - 14, VLAN, frame, modifiers));
+			if(ethertype == ETH_P_8021Q || ethertype == ETH_P_QINQ1){
+				return(decap(data + l2_header_length, length - l2_header_length, VLAN, frame, modifiers));
 			}
 			// MPLS tag next?
-			if(memcmp(data+12, "\x88\x47", 2) == 0){
-				return(decap(data + 14, length - 14, MPLS, frame, modifiers));
+			if(ethertype == ETH_P_MPLS_UC){
+				return(decap(data + l2_header_length, length - l2_header_length, MPLS, frame, modifiers));
 			}
 			// PPPoE session data next?
-			if(memcmp(data+12, "\x88\x64", 2) == 0){
-				return(decap(data + 14, length - 14, PPPoE, frame, modifiers));
+			if(ethertype == ETH_P_PPP_SES){
+				return(decap(data + l2_header_length, length - l2_header_length, PPPoE, frame, modifiers));
 			}
 			// IP next?
-			if(memcmp(data+12, "\x08\x00",2) == 0){
-				return(decap(data + 14, length - 14, IPv4, frame, modifiers));
+			if(ethertype == ETH_P_IP){
+				return(decap(data + l2_header_length, length - l2_header_length, IPv4, frame, modifiers));
+			}
+			// IPv6 next?
+			if(ethertype == ETH_P_IPV6){
+				return(decap(data + l2_header_length, length - l2_header_length, IPv6, frame, modifiers));
 			}
 			// Something else next?
-            		return(decap(data + 14, length - 14, UNKNOWN, frame, modifiers));
+			return(decap(data + l2_header_length, length - l2_header_length, UNKNOWN, frame, modifiers));
 			break;
 		case VLAN:
 			if(length < 4) return(frame);
 			frame->plen = length - 4;
 			frame->payload = data + 4;
 			memcpy(frame->etype, data+2, 2);
-			
+			ethertype = ntohs(*(uint16_t *)(data+2));
+
 			// Just skim over VLANs and determine the next encap type from the EtherType
 			// VLAN tag next?
-			if((memcmp(data+2, "\x81\x00", 2) == 0) || (memcmp(data+2, "\x91\x00",2) == 0)){
+			if(ethertype == ETH_P_8021Q || ethertype == ETH_P_QINQ1){
 				return(decap(data + 4, length - 4, VLAN, frame, modifiers));
 			}
 			// MPLS tag next?
-			if(memcmp(data+2, "\x88\x47", 2) == 0){
+			if(ethertype == ETH_P_MPLS_UC){
 				return(decap(data + 4, length - 4, MPLS, frame, modifiers));
 			}
 			// PPPoE session data next?
-			if(memcmp(data+2, "\x88\x64", 2) == 0){
+			if(ethertype == ETH_P_PPP_SES){
 				return(decap(data + 4, length - 4, PPPoE, frame, modifiers));
 			}
 			// IP next?
-			if(memcmp(data+2, "\x08\x00", 2) == 0){
+			if(ethertype == ETH_P_IP){
 				return(decap(data + 4, length - 4, IPv4, frame, modifiers));
+			}
+			// IPv6 next?
+			if(ethertype == ETH_P_IPV6){
+				return(decap(data + 4, length - 4, IPv6, frame, modifiers));
 			}
 			// Something else next?
 			return(decap(data + 4, length - 4, UNKNOWN, frame, modifiers));
@@ -140,7 +169,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			if(length < 4) return(frame);
 			frame->plen = length - 4;
 			frame->payload = data + 4;
-			
+
 			// Check bottom of stack bit to decide whether to keep stripping MPLS or try for Ethernet
 			if((data[2] & '\x01') == 0){
 				return(decap(data + 4, length - 4, MPLS, frame, modifiers));	// Not BOS, more MPLS
@@ -154,8 +183,8 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 				return(decap(data + 4, length - 4, UNKNOWN, frame, modifiers));
 			} else {
 				if(memcmp(data + 4, "\x00\x00\x00\x00", 4) == 0){
-					// guessing ethernet control word present... 
-					return(decap(data + 8, length - 8, ETHERNET, frame, modifiers));	
+					// guessing ethernet control word present...
+					return(decap(data + 8, length - 8, ETHERNET, frame, modifiers));
 				} else {
 					return(decap(data + 4, length - 4, ETHERNET, frame, modifiers));	// Ethernet (guess)
 				}
@@ -186,40 +215,58 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			else return(frame);
 		break;
 		case IPv4:
-			// If the protocol is IPv4 we may find some GRE / L2TP encap
-			if(length < 20) return(frame);
-			if(length < 4 * (data[0] & 15)) return(frame);
-            
-            frame->payload = data;
-            frame->plen = length;
-			
+		case IPv6:
+			if(type == IPv4) {
+				min_length = 20;
+			} else if(type == IPv6) {
+				min_length = 40;
+			}
+			// If the protocol is IP we may find some GRE / L2TP encap
+			if(length < min_length) return(frame);
+			if(type == IPv4) {
+				header_length = 4 * (data[0] & 15);
+			} else if(type == IPv6) {
+				header_length = 40;
+			}
+			if(length < header_length) return(frame);
+
+			frame->payload = data;
+			frame->plen = length;
+
 			// If the frame is a fragment and we're re-assembling, don't decapsulate any further at this point
-			if((((data[6] & '\x3f') | data[7]) != 0) && ((modifiers & NODEFRAG) == 0)) {
+			if(type == IPv4 && (((data[6] & '\x3f') | data[7]) != 0) && ((modifiers & NODEFRAG) == 0)) {
 				frame->fragment = 1;
 				return(frame);
 			}
-			
+
+			int l4_proto = -1;
+			if(type == IPv4) {
+				l4_proto = data[9];
+			} else if(type == IPv6) {
+				l4_proto = data[6];
+			}
+
 			// If not a fragment or we're skipping re-assembly, try for more encap
-			if(data[9] == '\x11'){			// UDP
-				return(decap(data + (4 * (data[0] & 15)), length - (4 * (unsigned char)(data[0] & 15)), UDP, frame, modifiers));
-			} else if(data[9] == '\x2f'){	// GRE
-				return(decap(data + (4 * (data[0] & 15)), length - (4 * (unsigned char)(data[0] & 15)), GRE, frame, modifiers));
-            } else {
-            	return(frame);
-            }
+			if(l4_proto == '\x11'){			// UDP
+				return(decap(data + header_length, length - header_length, UDP, frame, modifiers));
+			} else if(l4_proto == '\x2f'){	// GRE
+				return(decap(data + header_length, length - header_length, GRE, frame, modifiers));
+			} else {
+				return(frame);
+			}
 
 		break;
 		case GRE:
 			// GRE uses normal ethertypes to describe its payload, makes life easy.
-			
+
 			// If source routing is present in the GRE header, bail out
 			if(((unsigned char)data[0] & ROUTING_PRESENT) != 0) return(frame);
-			
+
 			// Adjust the offset according to what's in the GRE header
 			if(((unsigned char)data[0] & CHECKSUM_PRESENT) != 0) pos += 4;
 			if(((unsigned char)data[0] & KEY_PRESENT) != 0) pos += 4;
 			if(((unsigned char)data[0] & SEQUENCE_PRESENT) != 0) pos += 4;
-			
+
 			if(length < pos + 4){
 				return(frame);
 			} else {
@@ -227,36 +274,41 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 				frame->plen = length - (pos + 4);
 				frame->payload = data + pos + 4;
 				memcpy(frame->etype, data + 2, 2);
-			
+				int ethertype = ntohs(*(uint16_t *)(data+2));
+
 				// VLAN tag next?
-				if(memcmp(data+2, "\x81\x00", 2) == 0 || memcmp(data+2, "\x91\x00", 2) == 0){
+				if(ethertype == ETH_P_8021Q || ethertype == ETH_P_QINQ1){
 					return(decap(frame->payload, frame->plen, VLAN, frame, modifiers));
 				}
 				// MPLS tag next?
-				if(memcmp(data+2, "\x88\x47", 2) == 0){
+				if(ethertype == ETH_P_MPLS_UC){
 					return(decap(frame->payload, frame->plen, MPLS, frame, modifiers));
 				}
 				// PPPoE session data next?
-				if(memcmp(data+2, "\x88\x64", 2) == 0){
+				if(ethertype == ETH_P_PPP_SES){
 					return(decap(frame->payload, frame->plen, PPPoE, frame, modifiers));
 				}
 				// IP next?
-				if(memcmp(data+2, "\x08\x00",2) == 0){
-				return(decap(frame->payload, frame->plen, IPv4, frame, modifiers));
+				if(ethertype == ETH_P_IP){
+					return(decap(frame->payload, frame->plen, IPv4, frame, modifiers));
+				}
+				// IPv6 next?
+				if(ethertype == ETH_P_IPV6){
+					return(decap(frame->payload, frame->plen, IPv6, frame, modifiers));
 				}
 				// Something else next?
-    	        return(frame);
-            }
+				return(frame);
+			}
 		break;
 		case UDP:
 			// If the protocol is UDP, check for L2TP port numbers
 			if(length < 8) return(frame);
-			
-			if(memcmp(data + 2, "\x06\xa5", 2) == 0){		// L2TP
+			dst_port = ntohs(*(uint16_t *)(data + 2));
+			if(dst_port == 1701){		// L2TP
 				return(decap(data + 8, length - 8, L2TP, frame, modifiers));
-			} else if(memcmp(data + 2, "\x08\x68", 2) == 0){// GTP
+			} else if(dst_port == 2152){		// GTP
 				return(decap(data + 8, length - 8, GTP, frame, modifiers));
-			} else if((memcmp(data + 2, "\x12\xb5", 2) == 0) || (memcmp(data + 2, "\x21\x18", 2) == 0)){	// VXLAN
+			} else if(dst_port == 4789 || dst_port == 8472){		// VXLAN
 				return(decap(data + 8, length - 8, VXLAN, frame, modifiers));
 			} else return(frame);
 		break;
@@ -265,12 +317,12 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			// This only handles zero offset with no Ns / Nr as produced by IOS. Will need
 			// to test this against JunOS at some point to see if behaviour is different.
 			if(length < 10) return(frame);
-			if(	(data[0] == '\x02') && 
+			if(	(data[0] == '\x02') &&
 				(data[1] == '\x02') &&
 				(data[6] == '\x00') &&
 				(data[7] == '\x00') &&
 				(data[8] == '\xff') &&
-				(data[9] == '\x03') ) 
+				(data[9] == '\x03') )
 					return(decap(data + 10, length - 10, PPP, frame, modifiers));
 			// Otherwise, not L2TPv2 frame in the basic format we can handle
 			return(frame);
@@ -278,15 +330,15 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 		case GTP:
 			// If we get a GTP data packet, deal with the payload.
 			if(length < 28) return(frame);
-			
+
 			// If frame is not a GTP U frame then don't bother decap-ing it
 			if(((data[0] & '\xe0') != '\x20') || (data[1] != '\xff')) return(frame);
-			
+
 			vlen = (256*(unsigned char)data[2])+(unsigned char)data[3];
 
 			if((data[0] & '\x07') != 0) {						// Long header
 				if(vlen > (length - 8)) return(frame);			// If the header says length > remaining data, bail out
-				
+
 				pos = 12;
 				if(((unsigned char)data[0] & '\x04') != 0) {
 					while((unsigned char)data[pos-1] != 0){		// Shave off any extension headers
@@ -296,21 +348,20 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 					}
 				}
 			} else {											// Short header
-				if(vlen > (length - 8)) return(frame);			// If the header says length > remaining data, bail out
 				pos = 8;
 			}
-			
+
 			// Parsed OK, update frame template and parse IPv4
 			frame->plen = length - pos;
 			frame->payload = data + pos;
 			memcpy(frame->etype, "\x08\x00", 2);
-			return(decap(data + pos, vlen - pos, IPv4, frame, modifiers));
-			
+			return(decap(data + pos, length - pos, IPv4, frame, modifiers));
+
 		break;
 		case VXLAN:
 			// If we get a VXLAN candidate packet, sanity check then deal with the payload.
 			if(length < 22) return(frame); // Too short
-			
+
 			// Assume all reserved bits are zero - may need to update this in future
 			if(memcmp(data, "\x08\x00\x00\x00", 4) != 0){
 				// header not found, bail out
@@ -319,7 +370,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 				// VXLAN header present, update frame and go for Ethernet
 				return(decap(data + 8, length - 8, ETHERNET, frame, modifiers));
 			}
-			
+
 		break;
 		case UNKNOWN:
 			// Non-encapsulating payload, just return
@@ -331,7 +382,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 	return(NULL);
 }
 
-int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int modifiers){
+int parse_pcap(FILE *infile, FILE *outfile, fragment_list_t **fragtree, int modifiers){
 	char 				*memblock = NULL;
 	frame_t				*frame = NULL,
 						*decapped = NULL;
@@ -339,136 +390,140 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 	int					decapcount = 0,
 						fragmented = 0;
 	pcaprec_hdr_t		*rechdr = NULL;
-	
+
 	if(fragtree == NULL){
-		printf("\nDecapsulating...\n");
+		fprintf(stderr, "\nDecapsulating...\n");
 	} else {
-		printf("\nReassembling...\n");	
+		fprintf(stderr, "\nReassembling...\n");
 	}
-	
+
 	// Start parsing the capture file:
-	rewind(capfile);
-	clearerr(capfile);
+	if(infile != stdin) {
+		rewind(infile);
+		clearerr(infile);
+	}
 	memblock = (char*)malloc(sizeof(pcap_hdr_t));
 	if(memblock == NULL){
-		printf("Insufficient memory to load capture header.\n");
+		fprintf(stderr, "Insufficient memory to load capture header.\n");
 		return(0);
 	}
 	// Read the pcap header
-	if(fread (memblock, 1, sizeof(pcap_hdr_t), capfile) != sizeof(pcap_hdr_t)){
-		printf("Truncated capture file header - aborting.\n");
+	if(fread (memblock, 1, sizeof(pcap_hdr_t), infile) != sizeof(pcap_hdr_t)){
+		fprintf(stderr, "Truncated capture file header - aborting.\n");
 		if(memblock != NULL) free(memblock);
 		return(0);
 	}
 	// Verify the magic number in the header indicates a pcap file
-	if(((pcap_hdr_t*)memblock)->magic_number != 2712847316){
-		printf("\nError!\nThis is not a valid pcap file. If it has been saved as pcap-ng\nconsider converting it to original pcap format with tshark or similar.\n");
-		if(memblock != NULL) free(memblock); 
+	if(((pcap_hdr_t*)memblock)->magic_number != 0xa1b2c3d4){
+		fprintf(stderr, "\nError!\nThis is not a valid pcap file. If it has been saved as pcap-ng\nconsider converting it to original pcap format with tshark or similar.\n");
+		if(memblock != NULL) free(memblock);
 		return(0);
 	}
 	// Create the frame template used in the decap process
 	frame = malloc(sizeof(frame_t));
 	if(frame == NULL){
-		printf("Error: unable to allocate memory for frame template!\n");
+		fprintf(stderr, "Error: unable to allocate memory for frame template!\n");
 		return(0);
 	}
 	// Allocate memory for the PCAP record header
 	rechdr = (pcaprec_hdr_t*)malloc(sizeof(pcaprec_hdr_t));
 	if(rechdr == NULL){
-		printf("Error: unable to allocate memory for pcap record header!\n");
+		fprintf(stderr, "Error: unable to allocate memory for pcap record header!\n");
 		return(0);
 	}
 	// Clone the input file's header
-	rewind(outfile);
-	clearerr(outfile);
 	if(fwrite(memblock, 1, sizeof(pcap_hdr_t), outfile) != sizeof(pcap_hdr_t)){
-		printf("Error: unable to write pcap header to output file!\n");
+		fprintf(stderr, "Error: unable to write pcap header to output file!\n");
 		return(0);
 	}
 
+	// Get the link type.
+	char linktype = ETHERNET;
+	if (((pcap_hdr_t*)memblock)->network == DLT_LINUX_SLL) {
+		linktype = SLL;
+	}
+
 	// Read in each frame.
-	while((!feof(capfile)) & (!ferror(capfile))) {
+	while((!feof(infile)) & (!ferror(infile))) {
 		free(memblock);
 		// Get the packet record header and examine it for the packet size
-		caplen = fread (rechdr, 1, sizeof(pcaprec_hdr_t), capfile);
+		caplen = fread (rechdr, 1, sizeof(pcaprec_hdr_t), infile);
 		if(caplen != sizeof(pcaprec_hdr_t)){
-			if(caplen > 0) printf("Error: Truncated pcap file reading record header, %u/%lu!\n", caplen, sizeof(pcaprec_hdr_t));
+			if(caplen > 0) fprintf(stderr, "Error: Truncated pcap file reading record header, %u/%lu!\n", caplen, sizeof(pcaprec_hdr_t));
 			break;
 		}
 		caplen = rechdr->incl_len;
-		
+
 		memblock = malloc(caplen);
 		if(memblock == NULL){
-			printf("Error: Could not allocate memory for pcap record header!\n");
+			fprintf(stderr, "Error: Could not allocate memory for pcap record header!\n");
 			return(decapcount);
 		}
 		// Get the actual packet data and attempt to parse it
-		if(fread (memblock, 1, caplen, capfile) != caplen){
-			printf("Error: Truncated pcap file reading capture!\n");
+		if(fread (memblock, 1, caplen, infile) != caplen){
+			fprintf(stderr, "Error: Truncated pcap file reading capture!\n");
 			break;
 		}
-		
+
 		// Attempt to decapsulate the frame
-		frame->ether = NULL;
+		frame->l2 = NULL;
 		memcpy(frame->etype, "\x00\x00", 2);
 		frame->payload = NULL;
 		frame->plen = 0;
 		frame->fragment = 0;
-		
+
 		if((modifiers & DEBUGGING) == DEBUGGING){
-			printf("handling frame %u of %u bytes.\n", decapcount+1, caplen);
+			fprintf(stderr, "handling frame %u of %u bytes.\n", decapcount+1, caplen);
 			if(caplen > 13) hexdump(memblock, 14);
-			printf("\n\n");
+			fprintf(stderr, "\n\n");
 		}
 
 		// If we are handed a NULL pointer, decapsulate. Otherwise, defragment.
 		if(fragtree == NULL){
-			decapped = decap(memblock, caplen, ETHERNET, frame, modifiers);
+			decapped = decap(memblock, caplen, linktype, frame, modifiers);
 			fragmented = (fragmented | decapped->fragment);
 		} else {
-			decapped = reassemble(memblock, caplen, ETHERNET, frame, fragtree);
+			decapped = reassemble(memblock, caplen, linktype, frame, fragtree);
 		}
-		
+
 		// Write the decapsulated frame to the output file
 		if(decapped != NULL){
 			decapcount++;
 
-			if(decapped->plen < 46) { // pad undersized frames!
-				rechdr->incl_len = 60;
-				rechdr->orig_len = 60;
-			} else {
-				rechdr->incl_len = decapped->plen+14;
-				rechdr->orig_len = decapped->plen+14;
+			int ethertype_offset = -1;
+			int l2_header_length = -1;
+			if(linktype == ETHERNET) {
+				ethertype_offset = 12;
+				l2_header_length = 14;
+			} else if(linktype == SLL) {
+				ethertype_offset = 14;
+				l2_header_length = 16;
 			}
-						
+			rechdr->incl_len = decapped->plen+l2_header_length;
+			rechdr->orig_len -= caplen - rechdr->incl_len;
+
 			if(fwrite(rechdr, 1, sizeof(pcaprec_hdr_t), outfile) != sizeof(pcaprec_hdr_t)){
-				printf("Error: unable to write pcap record header to output file!\n");
+				fprintf(stderr, "Error: unable to write pcap record header to output file!\n");
 				return(0);
 			}
-			if(fwrite(decapped->ether, 1, 12, outfile) != 12){
-				printf("Error: unable to write frame to output pcap file\n");
+			if(fwrite(decapped->l2, 1, ethertype_offset, outfile) != ethertype_offset){
+				fprintf(stderr, "Error: unable to write frame to output pcap file\n");
 				return(0);
 			}
 			if(fwrite(decapped->etype, 1, 2, outfile) != 2){
-				printf("Error: unable to write frame to output pcap file\n");
+				fprintf(stderr, "Error: unable to write frame to output pcap file\n");
 				return(0);
 			}
 			if(fwrite(decapped->payload, 1, decapped->plen, outfile) != decapped->plen){
-				printf("Error: unable to write frame to output pcap file\n");
+				fprintf(stderr, "Error: unable to write frame to output pcap file\n");
 				return(0);
-			}
-			if(decapped->plen < 46) { // pad undersized frames!
-				if(fwrite(PADDING, 1, (46 - frame->plen), outfile) != (46 - decapped->plen)){
-					printf("Error: unable to write frame padding to output pcap file\n");
-					return(0);
-				}
 			}
 		}
 	}
 	if(rechdr != NULL){
 		free(rechdr);
 	}
-	
+
 	if(fragmented == 1){
 		return(-1);
 	} else {
@@ -485,77 +540,98 @@ int main(int argc, char *argv[]){
 	int					packets = 0;
 	fragment_list_t		*fraglist = NULL,
 						*cur = NULL;
-	
+
 	// Parse our command line parameters and verify they are usable. If not, show help.
 	parameters = parseParams(argc, argv);
 	if(parameters == NULL){
-		printf("stripe: a utility to remove VLAN tags, MPLS shims, PPPoE, L2TP headers,\n");
-		printf("etc. from the frames in a PCAP file and return untagged IP over Ethernet.\n");
-		printf("Version %s, %s\n\n", SWVERSION, SWRELEASEDATE);
-		printf("Usage:\n");
-		printf("%s -r inputcapfile -w outputcapfile [-f] [-v]\n\n",argv[0]);
-		printf("Where:\ninputcapfile is a tcpdump-style .cap file containing encapsulated IP \n");
-		printf("outputcapfile is the file where the decapsulated IP will be saved\n");
-		printf("-f instructs stripe not to attempt to merge fragmented IP packets\n");
-		printf("-v enables verbose debugging\n");
+		fprintf(stderr, "stripe: a utility to remove VLAN tags, MPLS shims, PPPoE, L2TP headers,\n");
+		fprintf(stderr, "etc. from the frames in a PCAP file and return untagged IP over Ethernet.\n");
+		fprintf(stderr, "Version %s, %s\n\n", SWVERSION, SWRELEASEDATE);
+		fprintf(stderr, "Usage:\n");
+		fprintf(stderr, "%s -r inputcapfile -w outputcapfile [-f] [-v]\n\n",argv[0]);
+		fprintf(stderr, "Where:\ninputcapfile is a tcpdump-style .cap file containing encapsulated IP ('-r -' for stdin)\n");
+		fprintf(stderr, "outputcapfile is the file where the decapsulated IP will be saved ('-w -' for stdout)\n");
+		fprintf(stderr, "-f instructs stripe not to attempt to merge fragmented IP packets\n");
+		fprintf(stderr, "-v enables verbose debugging\n");
 		return(1);
 	}
-	
+
 	// Attempt to open the capture file, defragment and decap:
-	infile = fopen(parameters->infile,"rb");
-	if (infile == NULL) {
-		printf("\nError!\nUnable to open input capture file!\n");
-		return(1);
+  if(parameters->infile[0] == '-' && parameters->infile[1] == '\0') {
+		// Use stdin
+		infile = stdin;
+	} else {
+		infile = fopen(parameters->infile,"rb");
+		if (infile == NULL) {
+			fprintf(stderr, "\nError!\nUnable to open input capture file!\n");
+			return(1);
+		}
 	}
 	tempfile = tmpfile();
 	if(tempfile == NULL){
-		printf("Error - could not create temporary file!\n");
+		fprintf(stderr, "Error - could not create temporary file!\n");
 		return(1);
 	}
-	outfile = fopen(parameters->outfile, "wb");
-	if(outfile == NULL){
-		printf("Error - could not open output file!\n");
-		return(1);
+  if(parameters->outfile[0] == '-' && parameters->outfile[1] == '\0') {
+		// Use stdout
+		outfile = stdout;
+	} else {
+		outfile = fopen(parameters->outfile, "wb");
+		if(outfile == NULL){
+			fprintf(stderr, "Error - could not open output file!\n");
+			return(1);
+		}
 	}
-	
+
 	if((parameters->modifiers & NODEFRAG) == 0){
-		packets = parse_pcap(infile, tempfile, &fraglist, parameters->modifiers);	
+		packets = parse_pcap(infile, tempfile, &fraglist, parameters->modifiers);
 		rewind(tempfile);
 		packets = parse_pcap(tempfile, outfile, NULL, parameters->modifiers);
 	} else {
-		printf("Reassembly disabled...\n");
+		fprintf(stderr, "Reassembly disabled...\n");
 		packets = parse_pcap(infile, outfile, NULL, parameters->modifiers);
 	}
-	
-	fclose(infile);
-	fclose(tempfile);
-	fclose(outfile);
 
-	
+	if(infile != stdout) {
+		fclose(infile);
+	}
+	fclose(tempfile);
+	if(outfile != stdout) {
+		fclose(outfile);
+	}
+
+
 
 	// If we need to re-assemble, do so and re-parse
 	while((packets == -1) && ((parameters->modifiers & NODEFRAG) == 0)){
-	    printf("got fragments, need to reassemble...\n");
+		fprintf(stderr, "got fragments, need to reassemble...\n");
 		// Create temporary file for use when re-assembling fragments
 		tempfile = tmpfile();
 		if(tempfile == NULL){
-			printf("Error - could not create temporary file!\n");
+			fprintf(stderr, "Error - could not create temporary file!\n");
 			return(1);
 		}
-		// Re-open outfile for reading
-		outfile = fopen(parameters->outfile, "rb");
-		if(outfile == NULL){
-			printf("Error - could not open output file!\n");
-			return(1);
+  	if(parameters->outfile[0] == '-' && parameters->outfile[1] == '\0') {
+			// Use stdout
+			outfile = stdout;
+		} else {
+			// Re-open outfile for reading
+			outfile = fopen(parameters->outfile, "rb");
+			if(outfile == NULL){
+				fprintf(stderr, "Error - could not open output file!\n");
+				return(1);
+			}
 		}
 
 		// Re-assemble into the temporary file
 		parse_pcap(outfile, tempfile, &fraglist, parameters->modifiers);
-		fclose(outfile);
-		
+		if(outfile != stdout) {
+			fclose(outfile);
+		}
+
 		// Warn if some frames had missing fragments
 		if(fraglist != NULL){
-			printf("Warning: missing fragment(s) on reassembly.\n");
+			fprintf(stderr, "Warning: missing fragment(s) on reassembly.\n");
 			// Free up that junk, we're never going to use it!
 			while(fraglist != NULL){
 				cur= fraglist->next;
@@ -568,23 +644,29 @@ int main(int argc, char *argv[]){
 			}
 
 		}
-		
-		outfile = fopen(parameters->outfile, "wb");
-		if(outfile == NULL){
-			printf("Error - could not open output file!\n");
-			return(1);
+
+  	if(parameters->outfile[0] == '-' && parameters->outfile[1] == '\0') {
+			// Use stdout
+			outfile = stdout;
+		} else {
+			outfile = fopen(parameters->outfile, "wb");
+			if(outfile == NULL){
+				fprintf(stderr, "Error - could not open output file!\n");
+				return(1);
+			}
 		}
 		// Decap the re-assembled packets
 		rewind(tempfile);
 		packets = parse_pcap(tempfile, outfile, NULL, parameters->modifiers);
+		if(outfile != stdout) {
+			fclose(outfile);
+		}
 		fclose(tempfile);
 	}
-	
-	printf("\n%d frames processed.\n", packets);
+
+	fprintf(stderr, "\n%d frames processed.\n", packets);
 
 
-	
+
 	return(0);
 }
-
-
