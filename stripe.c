@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <linux/limits.h>
 
 #include "stripe.h"
 #include "stripe-defrag.h"
@@ -25,11 +28,12 @@ params_t *parseParams(int argc, char *argv[]){
 	if(parameters == NULL) return(NULL);
 
 	// There must be 4 or 5 parameters
-	if((argc < 5) || (argc > 6)) return(NULL);
+	if((argc < 5) || (argc > 9)) return(NULL);
 
 	// Set some defaults
 	parameters->infile = NULL;
 	parameters->outfile = NULL;
+	parameters->tmpfile = "/tmp";
 	parameters->modifiers = 0;
 
 	// Look for the various flags, then store the corresponding value
@@ -41,6 +45,11 @@ params_t *parseParams(int argc, char *argv[]){
 		}
 		if((strcmp(argv[i],"-w") == 0) && (i < argc - 1)){
 			parameters->outfile = argv[++i];
+			i++;
+			continue;
+		}
+		if((strcmp(argv[i],"-t") == 0) && (i < argc - 1)){
+			parameters->tmpfile = argv[++i];
 			i++;
 			continue;
 		}
@@ -482,9 +491,13 @@ int main(int argc, char *argv[]){
 	FILE				*infile = NULL,
 						*outfile = NULL,
 						*tempfile = NULL;
-	int					packets = 0;
+	int					packets = 0,
+						tmpfd = -1,
+						tmpfile_len = -1,
+						tmpfnam_len = -1;
 	fragment_list_t		*fraglist = NULL,
 						*cur = NULL;
+	char				*tmpfnam = NULL;
 	
 	// Parse our command line parameters and verify they are usable. If not, show help.
 	parameters = parseParams(argc, argv);
@@ -493,13 +506,27 @@ int main(int argc, char *argv[]){
 		printf("etc. from the frames in a PCAP file and return untagged IP over Ethernet.\n");
 		printf("Version %s, %s\n\n", SWVERSION, SWRELEASEDATE);
 		printf("Usage:\n");
-		printf("%s -r inputcapfile -w outputcapfile [-f] [-v]\n\n",argv[0]);
+		printf("%s -r inputcapfile -w outputcapfile [-f] [-v] [-t /path/to/tmp ]\n\n",argv[0]);
 		printf("Where:\ninputcapfile is a tcpdump-style .cap file containing encapsulated IP \n");
 		printf("outputcapfile is the file where the decapsulated IP will be saved\n");
 		printf("-f instructs stripe not to attempt to merge fragmented IP packets\n");
 		printf("-v enables verbose debugging\n");
+		printf("-t provides alternate path to tmp file (default /tmp)\n");
 		return(1);
 	}
+
+	// Populate the tmpfnam buffer with the template for mkstemp()
+	tmpfile_len = strlen(parameters->tmpfile);
+	if(tmpfile_len < 1 || tmpfile_len > PATH_MAX) {
+		printf("Error! tmpfile must be between 1 and %d bytes\n", PATH_MAX);
+		return(1);
+	}
+	// Build /tmp/path or /tmp/path/ into /tmp/path/capXXXXXX
+	tmpfnam_len = tmpfile_len +
+		((parameters->tmpfile[tmpfile_len - 1] == '/')?0:1) + 10;
+	tmpfnam = malloc(tmpfnam_len);
+	snprintf(tmpfnam, tmpfnam_len, "%s%scapXXXXXX", parameters->tmpfile,
+			(parameters->tmpfile[tmpfile_len - 1] == '/')?"":"/");
 	
 	// Attempt to open the capture file, defragment and decap:
 	infile = fopen(parameters->infile,"rb");
@@ -507,7 +534,8 @@ int main(int argc, char *argv[]){
 		printf("\nError!\nUnable to open input capture file!\n");
 		return(1);
 	}
-	tempfile = tmpfile();
+	tmpfd = mkstemp(tmpfnam);
+	tempfile = fdopen(tmpfd, "w+b");
 	if(tempfile == NULL){
 		printf("Error - could not create temporary file!\n");
 		return(1);
@@ -531,13 +559,11 @@ int main(int argc, char *argv[]){
 	fclose(tempfile);
 	fclose(outfile);
 
-	
-
 	// If we need to re-assemble, do so and re-parse
 	while((packets == -1) && ((parameters->modifiers & NODEFRAG) == 0)){
 	    printf("got fragments, need to reassemble...\n");
 		// Create temporary file for use when re-assembling fragments
-		tempfile = tmpfile();
+		tempfile = fopen(tmpfnam, "w+b");
 		if(tempfile == NULL){
 			printf("Error - could not create temporary file!\n");
 			return(1);
@@ -580,9 +606,10 @@ int main(int argc, char *argv[]){
 		fclose(tempfile);
 	}
 	
+	unlink(tmpfnam);
+	free(tmpfnam);
+
 	printf("\n%d frames processed.\n", packets);
-
-
 	
 	return(0);
 }
