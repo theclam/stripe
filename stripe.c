@@ -242,7 +242,15 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 				}
 				// IP next?
 				if(memcmp(data+2, "\x08\x00",2) == 0){
-				return(decap(frame->payload, frame->plen, IPv4, frame, modifiers));
+					return(decap(frame->payload, frame->plen, IPv4, frame, modifiers));
+				}
+				// ERSPAN I or II next?
+				if(memcmp(data+2, "\x88\xbe",2) == 0){
+					return(decap(frame->payload, frame->plen, ERSPAN_I_OR_II, frame, modifiers));
+				}
+				// ERSPAN III next?
+				if(memcmp(data+2, "\x88\xeb",2) == 0){
+					return(decap(frame->payload, frame->plen, ERSPAN_III, frame, modifiers));
 				}
 				// Something else next?
     	        return(frame);
@@ -321,6 +329,35 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			}
 			
 		break;
+		case ERSPAN_I_OR_II:
+			// If we get ERSPAN, check what type and try to process.
+			if(length < pos + 22){
+				return(frame);
+			}
+			// Check for ERSPAN Type II - an 8 byte header with the original 4 byte CRC overwritten
+			if(((unsigned char)data[0] & '\xf0') == '\x10') {
+				return(decap(data + 8, length - 8, ETHERNET, frame, modifiers));
+			} else {
+				// Probably Type I, just dump the frame out
+				return(frame);
+			}
+		break;
+		case ERSPAN_III:
+			// If we get ERSPAN Type III, try to decode.
+			if(length < pos + 26){
+				return(frame);
+			}
+			// Check for ERSPAN Type III in version header
+			if(((unsigned char)data[0] & '\xf0') == '\x20') {
+				// Check for optional sub-header
+				if(((unsigned char)data[11] & '\x01') == '\x01') {
+					// Remove 12 byte ERSPAN III + 8 byte sub-header
+					return(decap(data + 20, length - 20, ETHERNET, frame, modifiers));
+				}
+			} else {
+				// Something went wrong, bail out
+				return(frame);
+			}
 		case UNKNOWN:
 			// Non-encapsulating payload, just return
 			frame->plen = length;

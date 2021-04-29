@@ -1,12 +1,12 @@
-stripe v0.3c
-Written by Foeh Mannay, January 2016
+stripe v0.4
+Written by Foeh Mannay, April 2021
 
 PURPOSE
 =======
 
 "stripe" is a tool which attempts to remove any and all encapsulating headers (i.e.
-VLAN tags, MPLS shim headers, PPPoE, GRE, L2TP, GTP and VXLAN) from a pcap file, leaving
-plain old payload over Ethernet. This is useful as some tools cannot work with
+VLAN tags, MPLS shim headers, PPPoE, GRE, L2TP, GTP, VXLAN and ERSPAN) from a pcap file,
+leaving plain old payload over Ethernet. This is useful as some tools cannot work with
 encapsulated frames and, until now, I couldn't find any automatic way to convert a pcap
 with such headers into a usable format.
 
@@ -14,7 +14,10 @@ The nested IP fragment re-assembly support *seems* to be stable now and is at th
 where I can no longer find any pcap files that trip it up. Please feel free to contribute
 any that you find!
 
-This version of stripe adds VXLAN support on the two standard UDP ports (8472 and 4789).
+This version of stripe adds ERSPAN support for Types I, II & III, though only Type II is
+actually tested at the moment.
+
+VXLAN is supported on the two standard UDP ports (8472 and 4789).
 
 Please see http://networkingbodges.blogspot.com/ for more information on the
 theory behind this if you are interested.
@@ -56,3 +59,5 @@ v0.3a	Added IP fragment reassembly support
 v0.3b	Added VXLAN support
 
 v0.3c	Fixed L2TPv2 support, which flat out didn't work up until now.
+
+v0.4	Added ERSPAN support
