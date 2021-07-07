@@ -312,7 +312,7 @@ frame_t *decap(char *data, unsigned int length, char type, frame_t *frame, int m
 			frame->plen = length - pos;
 			frame->payload = data + pos;
 			memcpy(frame->etype, "\x08\x00", 2);
-			return(decap(data + pos, vlen - pos, IPv4, frame, modifiers));
+			return(decap(data + pos, length - pos, IPv4, frame, modifiers));
 			
 		break;
 		case VXLAN:
