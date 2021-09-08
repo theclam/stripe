@@ -71,6 +71,7 @@ typedef struct pcaprec_hdr_s {
 typedef struct params_s {
 	char *infile;
 	char *outfile;
+	char *tmpfile;
 	char modifiers;
 } params_t;
 
