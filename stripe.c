@@ -505,6 +505,10 @@ int parse_pcap(FILE *capfile, FILE *outfile, fragment_list_t **fragtree, int mod
 	if(rechdr != NULL){
 		free(rechdr);
 	}
+
+    if (frame != NULL){
+        free(frame);
+    }
 	
 	if(fragmented == 1){
 		return(-1);
@@ -619,7 +623,7 @@ int main(int argc, char *argv[]){
 	
 	printf("\n%d frames processed.\n", packets);
 
-
+    free(parameters);
 	
 	return(0);
 }
