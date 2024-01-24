@@ -1,5 +1,5 @@
-stripe v0.4
-Written by Foeh Mannay, April 2021
+stripe v0.5
+Written by Foeh Mannay, January 2024
 
 PURPOSE
 =======
@@ -61,3 +61,6 @@ v0.3b	Added VXLAN support
 v0.3c	Fixed L2TPv2 support, which flat out didn't work up until now.
 
 v0.4	Added ERSPAN support
+
+v0.5	Fixed incorrect IP total length field calculation
+

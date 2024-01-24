@@ -102,9 +102,10 @@ frame_t *merge_fragment(fragment_detail_t *frag, fragment_list_t *fragmentlist){
 		frame->payload = malloc(ihl+fragmentlist->size);
 		memcpy(frame->payload, fragmentlist->header, ihl);
 		memcpy(frame->payload + ihl, fragmentlist->data, fragmentlist->size);
-		memcpy(frame->payload + 2, &fragmentlist->size, 2);	// Adjust total length
 		memcpy(frame->payload + 6, "\x00\x00",2);			// Reset fragment info
 		frame->plen = fragmentlist->size + ihl;
+		*(char*)(frame->payload + 2) = frame->plen / 256;		// Write back IP total length, now including IP
+		*(char*)(frame->payload + 3) = frame->plen % 256;		// header and in correct byte order - thanks, Frank!
 		memcpy(frame->etype, "\x08\x00", 2);
 		frame->fragment = 0;
 	}
